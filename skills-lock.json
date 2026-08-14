@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cosense": {
+      "source": "helpfeel/cosense-cli",
+      "sourceType": "github",
+      "skillPath": "skills/cosense/SKILL.md",
+      "computedHash": "5830db87cc274d3cc7d242c51aeeaa4b1e307435d710f8d5b1c2d4c53237512e"
+    }
+  }
+}
