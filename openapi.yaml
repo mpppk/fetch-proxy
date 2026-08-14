@@ -5,10 +5,11 @@ info:
   description: |
     CORS-enabled fetch proxy running on Cloudflare Workers.
 
-    プロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|md`
+    プロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|meta|md`
 
     * `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）
     * `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却
+    * `as=meta` — `<title>` と OGP メタ情報を JSON で返却
     * `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック
 
     追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。
@@ -59,7 +60,7 @@ paths:
             text/plain:
               schema:
                 type: string
-                example: 'fetch-proxy: use /<host>/<path>?as=html|title|md'
+                example: 'fetch-proxy: use /<host>/<path>?as=html|title|meta|md'
         '400':
           $ref: '#/components/responses/BadRequest'
 
@@ -81,7 +82,7 @@ paths:
 
     get:
       tags: [proxy]
-      summary: Proxy GET (html | title | md)
+      summary: Proxy GET (html | title | meta | md)
       operationId: proxyGet
       parameters:
         - name: as
@@ -91,7 +92,7 @@ paths:
             レスポンス形式。省略時 `html`。複数回指定すると 400。
           schema:
             type: string
-            enum: [html, title, md]
+            enum: [html, title, meta, md]
             default: html
           example: md
         - name: forwardedQuery
@@ -110,6 +111,7 @@ paths:
             成功。`as` により Content-Type が変わる:
             * `html` → `text/html; charset=utf-8`
             * `title` → `text/plain; charset=utf-8`
+            * `meta` → `application/json; charset=utf-8`
             * `md` → `text/markdown; charset=utf-8`
             オリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。
           headers:
@@ -136,6 +138,19 @@ paths:
                 title:
                   summary: as=title
                   value: 'Example Domain'
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageMeta'
+              examples:
+                meta:
+                  summary: as=meta
+                  value:
+                    title: 'jack on X: "just setting up my twttr" / X'
+                    ogTitle: 'jack (@jack) on X'
+                    ogDescription: 'just setting up my twttr'
+                    ogSiteName: 'X (formerly Twitter)'
+                    ogImage: 'https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH_400x400.jpg'
+                    description: 'just setting up my twttr'
             text/markdown:
               schema:
                 type: string
@@ -184,7 +199,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [html, title, md]
+            enum: [html, title, meta, md]
             default: html
       responses:
         '200':
@@ -275,7 +290,7 @@ components:
               value: 'as parameter cannot be specified multiple times'
             invalidAs:
               summary: invalid as value
-              value: 'invalid as value: foo. allowed: html, title, md'
+              value: 'invalid as value: foo. allowed: html, title, meta, md'
     BadGateway:
       description: Bad Gateway - upstream fetch or markdown conversion failure
       headers:
@@ -296,9 +311,40 @@ components:
               value: 'failed to convert to markdown: both defuddle and Browser Rendering failed'
 
   schemas:
+    PageMeta:
+      type: object
+      description: |
+        `as=meta` のレスポンス。抽出できなかったキーは空文字列 `""` になる。
+        各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。
+      required: [title, ogTitle, ogDescription, ogSiteName, ogImage, description]
+      properties:
+        title:
+          type: string
+          description: '`<title>` のテキスト'
+          example: 'jack on X: "just setting up my twttr" / X'
+        ogTitle:
+          type: string
+          description: '`og:title`'
+          example: 'jack (@jack) on X'
+        ogDescription:
+          type: string
+          description: '`og:description`'
+          example: 'just setting up my twttr'
+        ogSiteName:
+          type: string
+          description: '`og:site_name`'
+          example: 'X (formerly Twitter)'
+        ogImage:
+          type: string
+          description: '`og:image`'
+          example: 'https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH_400x400.jpg'
+        description:
+          type: string
+          description: '`meta[name=description]`'
+          example: 'just setting up my twttr'
     ProxyError:
       type: object
       properties:
         message:
           type: string
-          example: 'invalid as value: foo. allowed: html, title, md'
+          example: 'invalid as value: foo. allowed: html, title, meta, md'

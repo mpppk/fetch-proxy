@@ -3,7 +3,7 @@
   "info": {
     "title": "fetch-proxy",
     "version": "1.0.0",
-    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
+    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
     "contact": {
       "name": "mpppk",
       "url": "https://github.com/mpppk/fetch-proxy"
@@ -64,7 +64,7 @@
               "text/plain": {
                 "schema": {
                   "type": "string",
-                  "example": "fetch-proxy: use /<host>/<path>?as=html|title|md"
+                  "example": "fetch-proxy: use /<host>/<path>?as=html|title|meta|md"
                 }
               }
             }
@@ -93,7 +93,7 @@
         "tags": [
           "proxy"
         ],
-        "summary": "Proxy GET (html | title | md)",
+        "summary": "Proxy GET (html | title | meta | md)",
         "operationId": "proxyGet",
         "parameters": [
           {
@@ -106,6 +106,7 @@
               "enum": [
                 "html",
                 "title",
+                "meta",
                 "md"
               ],
               "default": "html"
@@ -126,7 +127,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功。`as` により Content-Type が変わる:\n* `html` → `text/html; charset=utf-8`\n* `title` → `text/plain; charset=utf-8`\n* `md` → `text/markdown; charset=utf-8`\nオリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。\n",
+            "description": "成功。`as` により Content-Type が変わる:\n* `html` → `text/html; charset=utf-8`\n* `title` → `text/plain; charset=utf-8`\n* `meta` → `application/json; charset=utf-8`\n* `md` → `text/markdown; charset=utf-8`\nオリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。\n",
             "headers": {
               "Access-Control-Allow-Origin": {
                 "$ref": "#/components/headers/CorsAllowOrigin"
@@ -161,6 +162,24 @@
                   "title": {
                     "summary": "as=title",
                     "value": "Example Domain"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageMeta"
+                },
+                "examples": {
+                  "meta": {
+                    "summary": "as=meta",
+                    "value": {
+                      "title": "jack on X: \"just setting up my twttr\" / X",
+                      "ogTitle": "jack (@jack) on X",
+                      "ogDescription": "just setting up my twttr",
+                      "ogSiteName": "X (formerly Twitter)",
+                      "ogImage": "https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH_400x400.jpg",
+                      "description": "just setting up my twttr"
+                    }
                   }
                 }
               },
@@ -239,6 +258,7 @@
               "enum": [
                 "html",
                 "title",
+                "meta",
                 "md"
               ],
               "default": "html"
@@ -372,7 +392,7 @@
               },
               "invalidAs": {
                 "summary": "invalid as value",
-                "value": "invalid as value: foo. allowed: html, title, md"
+                "value": "invalid as value: foo. allowed: html, title, meta, md"
               }
             }
           }
@@ -408,12 +428,56 @@
       }
     },
     "schemas": {
+      "PageMeta": {
+        "type": "object",
+        "description": "`as=meta` のレスポンス。抽出できなかったキーは空文字列 `\"\"` になる。\n各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。\n",
+        "required": [
+          "title",
+          "ogTitle",
+          "ogDescription",
+          "ogSiteName",
+          "ogImage",
+          "description"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "`<title>` のテキスト",
+            "example": "jack on X: \"just setting up my twttr\" / X"
+          },
+          "ogTitle": {
+            "type": "string",
+            "description": "`og:title`",
+            "example": "jack (@jack) on X"
+          },
+          "ogDescription": {
+            "type": "string",
+            "description": "`og:description`",
+            "example": "just setting up my twttr"
+          },
+          "ogSiteName": {
+            "type": "string",
+            "description": "`og:site_name`",
+            "example": "X (formerly Twitter)"
+          },
+          "ogImage": {
+            "type": "string",
+            "description": "`og:image`",
+            "example": "https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH_400x400.jpg"
+          },
+          "description": {
+            "type": "string",
+            "description": "`meta[name=description]`",
+            "example": "just setting up my twttr"
+          }
+        }
+      },
       "ProxyError": {
         "type": "object",
         "properties": {
           "message": {
             "type": "string",
-            "example": "invalid as value: foo. allowed: html, title, md"
+            "example": "invalid as value: foo. allowed: html, title, meta, md"
           }
         }
       }
