@@ -46,32 +46,76 @@ function withCors(headers: Record<string, string> = {}): Record<string, string> 
   return { ...corsHeaders, ...headers }
 }
 
-function extractTitle(html: string): string {
+type PageMeta = {
+  title: string
+  ogTitle: string
+  ogDescription: string
+  ogSiteName: string
+  ogImage: string
+  description: string
+}
+
+const emptyMeta: PageMeta = {
+  title: '',
+  ogTitle: '',
+  ogDescription: '',
+  ogSiteName: '',
+  ogImage: '',
+  description: '',
+}
+
+// Read a meta tag's content, tolerating property/name and escaped-colon variants
+function metaContent(document: any, key: string): string {
+  const el =
+    document.querySelector(`meta[property="${key}"]`) ??
+    document.querySelector(`meta[name="${key}"]`) ??
+    document.querySelector(`meta[property="${key.replace(':', '\\:')}"]`)
+  return el?.getAttribute('content')?.trim() ?? ''
+}
+
+// Regex fallback used when the HTML cannot be parsed at all
+function metaContentByRegex(html: string, key: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const patterns = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]*content=["']([^"']*)["']`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${escaped}["']`, 'i'),
+  ]
+  for (const pattern of patterns) {
+    const match = html.match(pattern)
+    if (match?.[1]?.trim()) return match[1].trim()
+  }
+  return ''
+}
+
+function extractMeta(html: string): PageMeta {
   try {
     const { document } = parseHTML(html)
-    // og:title - check property and name variants
-    const ogMeta =
-      document.querySelector('meta[property="og:title"]') ??
-      document.querySelector('meta[name="og:title"]') ??
-      document.querySelector('meta[property="og\\:title"]')
-    const ogContent = ogMeta?.getAttribute('content')?.trim()
-    if (ogContent && ogContent.length > 0) {
-      return ogContent
+    return {
+      title: document.querySelector('title')?.textContent?.trim() ?? '',
+      ogTitle: metaContent(document, 'og:title'),
+      ogDescription: metaContent(document, 'og:description'),
+      ogSiteName: metaContent(document, 'og:site_name'),
+      ogImage: metaContent(document, 'og:image'),
+      description: metaContent(document, 'description'),
     }
-    const titleEl = document.querySelector('title')
-    const titleText = titleEl?.textContent?.trim()
-    if (titleText && titleText.length > 0) {
-      return titleText
-    }
-    return ''
   } catch {
     // fallback regex if parse fails
-    const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["']/i)
-    if (ogMatch?.[1]?.trim()) return ogMatch[1].trim()
     const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i)
-    if (titleMatch?.[1]?.trim()) return titleMatch[1].trim()
-    return ''
+    return {
+      ...emptyMeta,
+      title: titleMatch?.[1]?.trim() ?? '',
+      ogTitle: metaContentByRegex(html, 'og:title'),
+      ogDescription: metaContentByRegex(html, 'og:description'),
+      ogSiteName: metaContentByRegex(html, 'og:site_name'),
+      ogImage: metaContentByRegex(html, 'og:image'),
+      description: metaContentByRegex(html, 'description'),
+    }
   }
+}
+
+function extractTitle(html: string): string {
+  const meta = extractMeta(html)
+  return meta.ogTitle || meta.title || ''
 }
 
 async function tryDefuddle(html: string, url: string): Promise<string | null> {
@@ -183,7 +227,7 @@ app.get('/', (c) => {
   // if root accessed without target, show usage
   // but if user explicitly wants to fetch root with as param? Still show help
   if (url.pathname === '/' && !url.searchParams.has('as') && url.searchParams.toString() === '') {
-    return c.text('fetch-proxy: use /<host>/<path>?as=html|title|md', 200, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
+    return c.text('fetch-proxy: use /<host>/<path>?as=html|title|meta|md', 200, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
   }
   // otherwise fall through to proxy logic? For '/' we treat as missing target
   return c.text('missing target host: use /<host>/<path>', 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
@@ -233,8 +277,8 @@ app.on(['GET', 'HEAD'], '/*', async (c) => {
     return c.text('as parameter cannot be specified multiple times', 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
   }
   let as = asValues[0] ?? 'html'
-  if (!['html', 'title', 'md'].includes(as)) {
-    return c.text(`invalid as value: ${as}. allowed: html, title, md`, 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
+  if (!['html', 'title', 'meta', 'md'].includes(as)) {
+    return c.text(`invalid as value: ${as}. allowed: html, title, meta, md`, 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
   }
 
   // Build forward query (exclude 'as')
@@ -302,6 +346,15 @@ app.on(['GET', 'HEAD'], '/*', async (c) => {
     const title = extractTitle(html)
     return new Response(title, {
       headers: withCors({ 'Content-Type': 'text/plain; charset=utf-8' }),
+    })
+  }
+
+  // as=meta : extract <title> and OGP metadata as JSON
+  if (as === 'meta') {
+    const html = await originRes.text()
+    const meta = extractMeta(html)
+    return new Response(JSON.stringify(meta), {
+      headers: withCors({ 'Content-Type': 'application/json; charset=utf-8' }),
     })
   }
 
