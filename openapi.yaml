@@ -1,0 +1,304 @@
+openapi: 3.1.0
+info:
+  title: fetch-proxy
+  version: 1.0.0
+  description: |
+    CORS-enabled fetch proxy running on Cloudflare Workers.
+
+    プロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|md`
+
+    * `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）
+    * `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却
+    * `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック
+
+    追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。
+    `https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。
+  contact:
+    name: mpppk
+    url: https://github.com/mpppk/fetch-proxy
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: https://fetch.nibo.sh
+    description: Production (wrangler.jsonc routes)
+  - url: https://fetch-proxy.workers.dev
+    description: workers.dev (workers_dev=true)
+
+security: [] # public API, no auth
+
+tags:
+  - name: proxy
+    description: Fetch proxy operations
+  - name: meta
+    description: Health / usage
+
+paths:
+  /:
+    get:
+      tags: [meta]
+      summary: Usage / health check
+      description: |
+        `as` パラメータなしで `/` にアクセスすると利用方法を返す。
+        `as` 付きやパスが `/` のままの場合は 400 を返すプロキシロジックと共通。
+      operationId: getRoot
+      responses:
+        '200':
+          description: Usage text
+          headers:
+            Access-Control-Allow-Origin:
+              $ref: '#/components/headers/CorsAllowOrigin'
+            Access-Control-Allow-Methods:
+              $ref: '#/components/headers/CorsAllowMethods'
+            Access-Control-Allow-Headers:
+              $ref: '#/components/headers/CorsAllowHeaders'
+            Access-Control-Max-Age:
+              $ref: '#/components/headers/CorsMaxAge'
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'fetch-proxy: use /<host>/<path>?as=html|title|md'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /{proxyPath}:
+    parameters:
+      - name: proxyPath
+        in: path
+        required: true
+        description: |
+          転送先ホスト＋パス。例: `example.com/foo/bar`, `example.com/foo/bar/baz`, `https://example.com/foo` も可（`https://` は剥離して `https://` で再構築）。
+          クエリは `?` 以降として別途転送される。空白を含めると 400。
+        schema:
+          type: string
+          pattern: '^[^\s]+$'
+        example: example.com/articles/123
+        # OpenAPI 3.1 ではパスにスラッシュを含むキャッチオールを厳密に表現できないため、
+        # ここでは 1 セグメント以上を含む greedy パスとして文書化する。
+        # 実装: src/index.ts:192 で `pathname.slice(1)` を `hostAndPath` として扱う。
+
+    get:
+      tags: [proxy]
+      summary: Proxy GET (html | title | md)
+      operationId: proxyGet
+      parameters:
+        - name: as
+          in: query
+          required: false
+          description: |
+            レスポンス形式。省略時 `html`。複数回指定すると 400。
+          schema:
+            type: string
+            enum: [html, title, md]
+            default: html
+          example: md
+        - name: forwardedQuery
+          in: query
+          required: false
+          description: |
+            `as` 以外の任意のクエリパラメータはそのまま転送先 URL に付与される。
+            例: `/example.com/search?q=hello&lang=ja&as=md` → `https://example.com/search?q=hello&lang=ja`
+          schema:
+            type: string
+          explode: true
+          allowReserved: true
+      responses:
+        '200':
+          description: |
+            成功。`as` により Content-Type が変わる:
+            * `html` → `text/html; charset=utf-8`
+            * `title` → `text/plain; charset=utf-8`
+            * `md` → `text/markdown; charset=utf-8`
+            オリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。
+          headers:
+            Access-Control-Allow-Origin:
+              $ref: '#/components/headers/CorsAllowOrigin'
+            Access-Control-Allow-Methods:
+              $ref: '#/components/headers/CorsAllowMethods'
+            Access-Control-Allow-Headers:
+              $ref: '#/components/headers/CorsAllowHeaders'
+            Content-Type:
+              $ref: '#/components/headers/ContentType'
+          content:
+            text/html:
+              schema:
+                type: string
+              examples:
+                html:
+                  summary: as=html
+                  value: '<!DOCTYPE html><html><head><title>Example</title></head><body>...</body></html>'
+            text/plain:
+              schema:
+                type: string
+              examples:
+                title:
+                  summary: as=title
+                  value: 'Example Domain'
+            text/markdown:
+              schema:
+                type: string
+              examples:
+                markdown:
+                  summary: as=md (defuddle or Browser Rendering)
+                  value: |
+                    # Example Domain
+
+                    This domain is for use in illustrative examples...
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '4XX':
+          description: Origin 4xx proxied as-is (CORS headers added)
+          headers:
+            Access-Control-Allow-Origin:
+              $ref: '#/components/headers/CorsAllowOrigin'
+            Content-Type:
+              $ref: '#/components/headers/ContentType'
+          content:
+            text/plain:
+              schema:
+                type: string
+            text/html:
+              schema:
+                type: string
+        '5XX':
+          description: Origin 5xx proxied as-is or fetch failure
+          headers:
+            Access-Control-Allow-Origin:
+              $ref: '#/components/headers/CorsAllowOrigin'
+          content:
+            text/plain:
+              schema:
+                type: string
+
+    head:
+      tags: [proxy]
+      summary: Proxy HEAD (same routing as GET)
+      operationId: proxyHead
+      parameters:
+        - name: as
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [html, title, md]
+            default: html
+      responses:
+        '200':
+          description: HEAD success (headers only, no body per HTTP spec)
+          headers:
+            Access-Control-Allow-Origin:
+              $ref: '#/components/headers/CorsAllowOrigin'
+            Access-Control-Allow-Methods:
+              $ref: '#/components/headers/CorsAllowMethods'
+            Content-Type:
+              $ref: '#/components/headers/ContentType'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+    options:
+      tags: [proxy]
+      summary: CORS preflight
+      operationId: proxyOptions
+      responses:
+        '204':
+          description: No Content - CORS preflight success
+          headers:
+            Access-Control-Allow-Origin:
+              $ref: '#/components/headers/CorsAllowOrigin'
+            Access-Control-Allow-Methods:
+              $ref: '#/components/headers/CorsAllowMethods'
+            Access-Control-Allow-Headers:
+              $ref: '#/components/headers/CorsAllowHeaders'
+            Access-Control-Max-Age:
+              $ref: '#/components/headers/CorsMaxAge'
+
+components:
+  headers:
+    CorsAllowOrigin:
+      description: CORS allow origin
+      schema:
+        type: string
+        example: '*'
+    CorsAllowMethods:
+      description: CORS allow methods
+      schema:
+        type: string
+        example: 'GET, HEAD, OPTIONS'
+    CorsAllowHeaders:
+      description: CORS allow headers
+      schema:
+        type: string
+        example: '*'
+    CorsMaxAge:
+      description: CORS max age seconds
+      schema:
+        type: string
+        example: '86400'
+    ContentType:
+      description: Content-Type
+      schema:
+        type: string
+        example: 'text/html; charset=utf-8'
+
+  responses:
+    BadRequest:
+      description: Bad Request - validation error
+      headers:
+        Access-Control-Allow-Origin:
+          $ref: '#/components/headers/CorsAllowOrigin'
+        Access-Control-Allow-Methods:
+          $ref: '#/components/headers/CorsAllowMethods'
+        Content-Type:
+          $ref: '#/components/headers/ContentType'
+      content:
+        text/plain:
+          schema:
+            type: string
+          examples:
+            missingHost:
+              summary: missing target host
+              value: 'missing target host: use /<host>/<path>'
+            invalidHost:
+              summary: invalid host (space or URL parse fail)
+              value: 'invalid target host'
+            invalidUrl:
+              summary: invalid URL
+              value: 'invalid target URL'
+            duplicateAs:
+              summary: duplicate as
+              value: 'as parameter cannot be specified multiple times'
+            invalidAs:
+              summary: invalid as value
+              value: 'invalid as value: foo. allowed: html, title, md'
+    BadGateway:
+      description: Bad Gateway - upstream fetch or markdown conversion failure
+      headers:
+        Access-Control-Allow-Origin:
+          $ref: '#/components/headers/CorsAllowOrigin'
+        Content-Type:
+          $ref: '#/components/headers/ContentType'
+      content:
+        text/plain:
+          schema:
+            type: string
+          examples:
+            fetchFail:
+              summary: fetch failed
+              value: 'failed to fetch target: ...'
+            mdFail:
+              summary: both defuddle and Browser Rendering failed
+              value: 'failed to convert to markdown: both defuddle and Browser Rendering failed'
+
+  schemas:
+    ProxyError:
+      type: object
+      properties:
+        message:
+          type: string
+          example: 'invalid as value: foo. allowed: html, title, md'
