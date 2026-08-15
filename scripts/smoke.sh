@@ -107,9 +107,13 @@ check_body GET "/example.com/" 200 "Example Domain"
 check_header GET "/example.com/?as=html" 200 "Access-Control-Allow-Origin" "*"
 check_header GET "/example.com/?as=html" 200 "Content-Type" "text/html"
 
-# --- Proxy: title ---
-check_body GET "/example.com/?as=title" 200 "Example Domain"
-check_header GET "/example.com/?as=title" 200 "Content-Type" "text/plain"
+# --- Proxy: meta ---
+check_body GET "/example.com/?as=meta" 200 "Example Domain"
+check_header GET "/example.com/?as=meta" 200 "Content-Type" "application/json"
+check_header GET "/example.com/?as=meta" 200 "Access-Control-Allow-Origin" "*"
+
+# --- as=title removed ---
+check_body GET "/example.com/?as=title" 400 "as=title has been removed"
 
 # --- Proxy: md ---
 check_body GET "/example.com/?as=md" 200 "Example Domain"
@@ -117,10 +121,10 @@ check_header GET "/example.com/?as=md" 200 "Content-Type" "text/markdown"
 check_header GET "/example.com/?as=md" 200 "Access-Control-Allow-Origin" "*"
 
 # --- Query forwarding ---
-check_body GET "/example.com/?as=title" 200 "Example Domain"
+check_body GET "/example.com/?as=meta" 200 "Example Domain"
 
 # --- https:// prefix handling ---
-check_body GET "/https://example.com/?as=title" 200 "Example Domain"
+check_body GET "/https://example.com/?as=meta" 200 "Example Domain"
 
 # --- Method not allowed ---
 check_status POST "/example.com/" 405

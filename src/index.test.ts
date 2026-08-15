@@ -33,8 +33,14 @@ describe("fetch-proxy", () => {
     expect(res.status).toBe(405);
   });
 
-  it("GET /example.com/?as=title extracts og:title", async () => {
-    const html = `<!DOCTYPE html><html><head><meta property="og:title" content="OG Title"><title>Fallback</title></head><body>hello</body></html>`;
+  it("GET /example.com/?as=title has been removed (400)", async () => {
+    const res = await app.request("/example.com/?as=title");
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("as=title has been removed");
+  });
+
+  it("GET /example.com/?as=meta extracts og:title and title", async () => {
+    const html = `<!DOCTYPE html><html><head><meta property="og:title" content="OG Title"><meta property="og:description" content="OG Desc"><title>Fallback</title></head><body>hello</body></html>`;
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(html, {
         status: 200,
@@ -42,10 +48,17 @@ describe("fetch-proxy", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const res = await app.request("/example.com/?as=title");
+    const res = await app.request("/example.com/?as=meta");
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe("OG Title");
-    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(res.headers.get("Content-Type")).toContain("application/json");
+    const meta = (await res.json()) as {
+      title: string;
+      ogTitle: string;
+      ogDescription: string;
+    };
+    expect(meta.ogTitle).toBe("OG Title");
+    expect(meta.title).toBe("Fallback");
+    expect(meta.ogDescription).toBe("OG Desc");
     vi.unstubAllGlobals();
   });
 
