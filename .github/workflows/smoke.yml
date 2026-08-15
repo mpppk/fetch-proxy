@@ -1,0 +1,34 @@
+name: Smoke Test
+
+on:
+  schedule:
+    # 1時間ごとにデプロイ済み環境をスモークする (UTC)。
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "スモーク対象の Base URL (プレビュー URL など)"
+        required: false
+        default: "https://fetch.nibo.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke test (${{ matrix.url || github.event.inputs.url || 'https://fetch.nibo.sh' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'schedule' && '[{"name":"production","url":"https://fetch.nibo.sh"},{"name":"workers-dev","url":"https://fetch-proxy.niboshi.workers.dev"}]' || '[{"name":"dispatch","url":""}]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run smoke test
+        env:
+          SMOKE_URL: ${{ matrix.url || github.event.inputs.url || 'https://fetch.nibo.sh' }}
+        run: bash scripts/smoke.sh "$SMOKE_URL"

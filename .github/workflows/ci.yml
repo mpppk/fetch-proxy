@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# 最小権限。CI は読み取りのみで足りる(依存の postinstall が書き込みトークンを
+# 持たないようにする)。wine と同一の指定に揃える。
+permissions:
+  contents: read
+
+# 同一ブランチへの連続 push では古いコミットの run をキャンセルする
+# (PR のみ。main への push は履歴として全て走らせる)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: Type Check, Lint, Format & Test
+    runs-on: ubuntu-latest
+    # 既定(360分)のままだと vitest のハング等で最長6時間ランナーを占有する。
+    # 通常は数分で終わるジョブなので、余裕を見た上限を明示する。
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # bun のバージョンは package.json の packageManager が唯一の真実の源。
+          # 未指定だと毎回 latest が入り、bun 側のリグレッションでリポジトリ無変更のまま
+          # CI とデプロイが同時に壊れうる。Renovate が packageManager の更新PRを出す。
+          bun-version-file: package.json
+
+      # bun のパッケージキャッシュ(setup-bun はバイナリのみキャッシュする)。
+      # bun.lock が変わらない限りレジストリからの全取得を避ける。
+      - name: Cache bun packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      # setup-bun は bun-version-file の解決に失敗しても既定(latest)へ**黙って**フォールバックする。
+      # 固定が効かなくなったことに気づけるよう、実際に動いている bun を突き合わせる。
+      - name: Verify pinned bun version
+        run: |
+          bun -e '
+            const want = (await Bun.file("package.json").json()).packageManager.replace("bun@", "");
+            if (Bun.version !== want) {
+              console.error(`bun version mismatch: packageManager=${want} running=${Bun.version}`);
+              process.exit(1);
+            }
+            console.log(`bun ${Bun.version} (pinned via packageManager)`);
+          '
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # コミット済みの worker-configuration.d.ts が wrangler.jsonc と揃っているかを見る。
+      # バインディングを足して再生成を忘れると `Env` 型が古いまま **typecheck は緑になり**、
+      # 未型付け・存在しないバインディングへのアクセスが実行時まで漏れる。
+      # Type check より前に置く。型が古いままの typecheck は「緑だが信用できない」状態で、
+      # 先に鮮度を見たほうが失敗の意味が明確になる。
+      - name: Check generated Worker types are fresh
+        run: bun run check:types
+        env:
+          WRANGLER_SEND_METRICS: "false"
+
+      - name: Type check
+        run: bun run typecheck
+
+      - name: Lint & Format check (Biome)
+        run: bun run check
+
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun run test
+
+      # build が通っても deploy で落ちる非互換を検出する。
+      # dry-run は生成された設定を実際に読んでバンドル・バインディングを
+      # 解決するが、アップロードはしないため認証情報を必要としない。
+      - name: Verify deploy config (dry-run)
+        run: bun run check:deploy
+        env:
+          WRANGLER_SEND_METRICS: "false"
