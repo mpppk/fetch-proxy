@@ -114,6 +114,102 @@ describe("fetch-proxy", () => {
     vi.unstubAllGlobals();
   });
 
+  it("GET /youtu.be/<id>?as=meta reads the video title from oEmbed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          title: "Never Gonna Give You Up",
+          author_name: "Rick Astley",
+          thumbnail_url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/youtu.be/dQw4w9WgXcQ?si=tracking&as=meta");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      title: "Never Gonna Give You Up - YouTube",
+      ogTitle: "Never Gonna Give You Up",
+      ogDescription: "",
+      ogSiteName: "YouTube",
+      ogImage: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+      description: "",
+    });
+
+    // The watch page itself is never requested: YouTube answers Workers with a
+    // CAPTCHA interstitial, which is what made the title "YouTube" before.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("/oembed?");
+    vi.unstubAllGlobals();
+  });
+
+  it("GET /www.youtube.com/watch?as=meta falls back to the origin when oEmbed fails", async () => {
+    const html = `<!DOCTYPE html><html><head><title>YouTube</title></head><body></body></html>`;
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/oembed?")
+          ? new Response("Bad Request", { status: 400 })
+          : new Response(html, {
+              status: 200,
+              headers: { "Content-Type": "text/html; charset=utf-8" },
+            }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request(
+      "/www.youtube.com/watch?v=dQw4w9WgXcQ&as=meta",
+    );
+    expect(res.status).toBe(200);
+    const meta = (await res.json()) as { title: string };
+    expect(meta.title).toBe("YouTube");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("GET /youtu.be/<id>?as=html still proxies the origin", async () => {
+    const html =
+      "<html><head><title>YouTube</title></head><body></body></html>";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(html, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/youtu.be/dQw4w9WgXcQ?as=html");
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://youtu.be/dQw4w9WgXcQ",
+      expect.anything(),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("GET /www.youtube.com/@channel?as=meta uses the origin, not oEmbed", async () => {
+    const html = `<!DOCTYPE html><html><head><meta property="og:title" content="Rick Astley"></head><body></body></html>`;
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(html, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/www.youtube.com/@RickAstleyYT?as=meta");
+    expect(res.status).toBe(200);
+    const meta = (await res.json()) as { ogTitle: string };
+    expect(meta.ogTitle).toBe("Rick Astley");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://www.youtube.com/@RickAstleyYT",
+      expect.anything(),
+    );
+    vi.unstubAllGlobals();
+  });
+
   it("forwards query params except as", async () => {
     const html = "<html><head><title>A</title></head><body></body></html>";
     const fetchMock = vi.fn().mockResolvedValue(

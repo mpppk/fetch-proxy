@@ -13,6 +13,10 @@ info:
     `as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合
     （クライアントサイドレンダリングの SPA など）、Browser Rendering
     (`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。
+
+    YouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、
+    `as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。
+    YouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。
     * `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック
 
     追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。
@@ -313,6 +317,10 @@ components:
         オリジン HTML に `og:title` も `<title>` も無い場合は Browser Rendering で
         レンダリング後の DOM から再抽出し、オリジン HTML 側で取得済みの値を優先して空欄のみ埋める。
         各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。
+        YouTube の動画 URL では oEmbed の結果を同じ形に整えて返す
+        (`title` は `"<動画タイトル> - YouTube"`, `ogTitle` は動画タイトル,
+        `ogSiteName` は `"YouTube"`, `ogImage` はサムネイル URL。
+        oEmbed は description を返さないため `ogDescription` / `description` は空)。
       required: [title, ogTitle, ogDescription, ogSiteName, ogImage, description]
       properties:
         title:

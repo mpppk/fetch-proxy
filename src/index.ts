@@ -1,5 +1,10 @@
 import { Hono } from "hono";
 import { parseHTML } from "linkedom";
+import {
+  fetchYouTubeOEmbed,
+  type YouTubeOEmbed,
+  youtubeWatchUrl,
+} from "./youtube";
 
 // Polyfill global document/DOMParser for defuddle/turndown in workerd (Cloudflare Workers)
 // Must run before defuddle is imported, because turndown's canParseHTMLNatively runs at module load
@@ -130,6 +135,22 @@ function extractMeta(html: string): PageMeta {
 // is written by JS. Signals that Browser Rendering is worth the round trip.
 function needsRendering(meta: PageMeta): boolean {
   return !meta.ogTitle && !meta.title;
+}
+
+// Shape a video's oEmbed record like the metadata the origin HTML would have
+// carried, so as=meta answers with the same keys for YouTube as for any other
+// page. `title` gets the site suffix YouTube's own <title> carries; `ogTitle`
+// stays the bare video title, matching its og:title. oEmbed exposes no
+// description, so ogDescription/description stay empty rather than being filled
+// with the channel name, which is not one.
+function youtubeMeta(video: YouTubeOEmbed): PageMeta {
+  return {
+    ...emptyMeta,
+    title: `${video.title} - YouTube`,
+    ogTitle: video.title,
+    ogSiteName: "YouTube",
+    ogImage: video.thumbnailUrl,
+  };
 }
 
 // Keep every value the origin HTML already provided; fill only the blanks from
@@ -444,6 +465,25 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
       400,
       withCors({ "Content-Type": "text/plain; charset=utf-8" }),
     );
+  }
+
+  // YouTube never serves a watch page to a Worker — it answers with a CAPTCHA
+  // interstitial (429) or a shell titled just "YouTube" — so the video title has
+  // to come from oEmbed instead. This runs before the origin fetch because the
+  // 429 is relayed to the caller below, well before as=meta gets a look in.
+  // A video oEmbed cannot answer for (private, removed) falls through.
+  if (as === "meta") {
+    const watchUrl = youtubeWatchUrl(targetUrl);
+    if (watchUrl) {
+      const video = await fetchYouTubeOEmbed(watchUrl);
+      if (video) {
+        return new Response(JSON.stringify(youtubeMeta(video)), {
+          headers: withCors({
+            "Content-Type": "application/json; charset=utf-8",
+          }),
+        });
+      }
+    }
   }
 
   // Fetch target

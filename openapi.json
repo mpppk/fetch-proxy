@@ -3,7 +3,7 @@
   "info": {
     "title": "fetch-proxy",
     "version": "1.0.0",
-    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
+    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n\nYouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、\n`as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。\nYouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
     "contact": {
       "name": "mpppk",
       "url": "https://github.com/mpppk/fetch-proxy"
@@ -417,7 +417,7 @@
     "schemas": {
       "PageMeta": {
         "type": "object",
-        "description": "`as=meta` のレスポンス。抽出できなかったキーは空文字列 `\"\"` になる。\nオリジン HTML に `og:title` も `<title>` も無い場合は Browser Rendering で\nレンダリング後の DOM から再抽出し、オリジン HTML 側で取得済みの値を優先して空欄のみ埋める。\n各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。\n",
+        "description": "`as=meta` のレスポンス。抽出できなかったキーは空文字列 `\"\"` になる。\nオリジン HTML に `og:title` も `<title>` も無い場合は Browser Rendering で\nレンダリング後の DOM から再抽出し、オリジン HTML 側で取得済みの値を優先して空欄のみ埋める。\n各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。\nYouTube の動画 URL では oEmbed の結果を同じ形に整えて返す\n(`title` は `\"<動画タイトル> - YouTube\"`, `ogTitle` は動画タイトル,\n`ogSiteName` は `\"YouTube\"`, `ogImage` はサムネイル URL。\noEmbed は description を返さないため `ogDescription` / `description` は空)。\n",
         "required": [
           "title",
           "ogTitle",
