@@ -5,13 +5,12 @@ info:
   description: |
     CORS-enabled fetch proxy running on Cloudflare Workers.
 
-    プロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|meta|md`
+    プロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`
 
     * `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）
-    * `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却
     * `as=meta` — `<title>` と OGP メタ情報を JSON で返却
 
-    `as=title` / `as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合
+    `as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合
     （クライアントサイドレンダリングの SPA など）、Browser Rendering
     (`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。
     * `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック
@@ -64,7 +63,7 @@ paths:
             text/plain:
               schema:
                 type: string
-                example: 'fetch-proxy: use /<host>/<path>?as=html|title|meta|md'
+                example: 'fetch-proxy: use /<host>/<path>?as=html|meta|md'
         '400':
           $ref: '#/components/responses/BadRequest'
 
@@ -86,7 +85,7 @@ paths:
 
     get:
       tags: [proxy]
-      summary: Proxy GET (html | title | meta | md)
+      summary: Proxy GET (html | meta | md)
       operationId: proxyGet
       parameters:
         - name: as
@@ -96,7 +95,7 @@ paths:
             レスポンス形式。省略時 `html`。複数回指定すると 400。
           schema:
             type: string
-            enum: [html, title, meta, md]
+            enum: [html, meta, md]
             default: html
           example: md
         - name: forwardedQuery
@@ -114,7 +113,6 @@ paths:
           description: |
             成功。`as` により Content-Type が変わる:
             * `html` → `text/html; charset=utf-8`
-            * `title` → `text/plain; charset=utf-8`
             * `meta` → `application/json; charset=utf-8`
             * `md` → `text/markdown; charset=utf-8`
             オリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。
@@ -135,13 +133,6 @@ paths:
                 html:
                   summary: as=html
                   value: '<!DOCTYPE html><html><head><title>Example</title></head><body>...</body></html>'
-            text/plain:
-              schema:
-                type: string
-              examples:
-                title:
-                  summary: as=title
-                  value: 'Example Domain'
             application/json:
               schema:
                 $ref: '#/components/schemas/PageMeta'
@@ -203,7 +194,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [html, title, meta, md]
+            enum: [html, meta, md]
             default: html
       responses:
         '200':
@@ -294,7 +285,7 @@ components:
               value: 'as parameter cannot be specified multiple times'
             invalidAs:
               summary: invalid as value
-              value: 'invalid as value: foo. allowed: html, title, meta, md'
+              value: 'invalid as value: foo. allowed: html, meta, md'
     BadGateway:
       description: Bad Gateway - upstream fetch or markdown conversion failure
       headers:
@@ -353,4 +344,4 @@ components:
       properties:
         message:
           type: string
-          example: 'invalid as value: foo. allowed: html, title, meta, md'
+          example: 'invalid as value: foo. allowed: html, meta, md'
