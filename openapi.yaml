@@ -10,6 +10,10 @@ info:
     * `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）
     * `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却
     * `as=meta` — `<title>` と OGP メタ情報を JSON で返却
+
+    `as=title` / `as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合
+    （クライアントサイドレンダリングの SPA など）、Browser Rendering
+    (`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。
     * `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック
 
     追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。
@@ -315,6 +319,8 @@ components:
       type: object
       description: |
         `as=meta` のレスポンス。抽出できなかったキーは空文字列 `""` になる。
+        オリジン HTML に `og:title` も `<title>` も無い場合は Browser Rendering で
+        レンダリング後の DOM から再抽出し、オリジン HTML 側で取得済みの値を優先して空欄のみ埋める。
         各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。
       required: [title, ogTitle, ogDescription, ogSiteName, ogImage, description]
       properties:

@@ -113,9 +113,28 @@ function extractMeta(html: string): PageMeta {
   }
 }
 
-function extractTitle(html: string): string {
-  const meta = extractMeta(html)
+function extractTitle(meta: PageMeta): string {
   return meta.ogTitle || meta.title || ''
+}
+
+// A page whose HTML carries neither og:title nor <title> is almost always a
+// client-side rendered SPA: the origin serves an empty shell and the real head
+// is written by JS. Signals that Browser Rendering is worth the round trip.
+function needsRendering(meta: PageMeta): boolean {
+  return !meta.ogTitle && !meta.title
+}
+
+// Keep every value the origin HTML already provided; fill only the blanks from
+// the rendered page.
+function mergeMeta(primary: PageMeta, fallback: PageMeta): PageMeta {
+  return {
+    title: primary.title || fallback.title,
+    ogTitle: primary.ogTitle || fallback.ogTitle,
+    ogDescription: primary.ogDescription || fallback.ogDescription,
+    ogSiteName: primary.ogSiteName || fallback.ogSiteName,
+    ogImage: primary.ogImage || fallback.ogImage,
+    description: primary.description || fallback.description,
+  }
 }
 
 async function tryDefuddle(html: string, url: string): Promise<string | null> {
@@ -171,6 +190,48 @@ async function tryDefuddle(html: string, url: string): Promise<string | null> {
     g.HTMLElement = prevHTMLElement
     g.NodeFilter = prevNodeFilter
     g.Text = prevText
+  }
+}
+
+// Titles change rarely, and browser renders are slow enough that a cold one can
+// outlast a caller's timeout. Caching them keeps a user's retry cheap.
+const BROWSER_META_CACHE_TTL_SECONDS = 600
+
+/**
+ * Re-fetch the page through Browser Rendering and extract its metadata from the
+ * rendered DOM. Used by as=title / as=meta when the origin HTML has no title at
+ * all, which is the case for client-side rendered SPAs.
+ *
+ * Images, media, fonts and stylesheets are blocked: nothing is painted here, and
+ * skipping them makes `networkidle0` settle noticeably sooner.
+ */
+async function browserMeta(env: Bindings, targetUrl: string): Promise<PageMeta | null> {
+  if (!env.BROWSER) return null
+  try {
+    const res = await env.BROWSER.quickAction('content', {
+      url: targetUrl,
+      gotoOptions: { waitUntil: 'load' },
+      rejectResourceTypes: ['image', 'media', 'font', 'stylesheet'],
+      bestAttempt: true,
+      cacheTTL: BROWSER_META_CACHE_TTL_SECONDS,
+    } as any)
+
+    if (!res.ok) return null
+    const data = (await res.json()) as {
+      success: boolean
+      result?: string
+      meta?: { status?: number; title?: string }
+    }
+    if (!data.success || typeof data.result !== 'string') return null
+
+    const meta = extractMeta(data.result)
+    // Browser Rendering reports document.title separately, which survives even
+    // when the SPA sets it without ever writing a <title> element we can parse.
+    const documentTitle = data.meta?.title?.trim() ?? ''
+    return { ...meta, title: meta.title || documentTitle }
+  } catch (e) {
+    console.error('browserMeta error:', e)
+    return null
   }
 }
 
@@ -340,19 +401,24 @@ app.on(['GET', 'HEAD'], '/*', async (c) => {
     })
   }
 
-  // as=title : extract title
-  if (as === 'title') {
+  // as=title / as=meta : extract <title> and OGP metadata, falling back to
+  // Browser Rendering when the origin HTML has no title (client-side rendered
+  // SPAs serve an empty shell, so string parsing alone yields nothing).
+  if (as === 'title' || as === 'meta') {
     const html = await originRes.text()
-    const title = extractTitle(html)
-    return new Response(title, {
-      headers: withCors({ 'Content-Type': 'text/plain; charset=utf-8' }),
-    })
-  }
+    let meta = extractMeta(html)
 
-  // as=meta : extract <title> and OGP metadata as JSON
-  if (as === 'meta') {
-    const html = await originRes.text()
-    const meta = extractMeta(html)
+    if (needsRendering(meta)) {
+      const rendered = await browserMeta(c.env, targetUrl)
+      if (rendered) meta = mergeMeta(meta, rendered)
+    }
+
+    if (as === 'title') {
+      return new Response(extractTitle(meta), {
+        headers: withCors({ 'Content-Type': 'text/plain; charset=utf-8' }),
+      })
+    }
+
     return new Response(JSON.stringify(meta), {
       headers: withCors({ 'Content-Type': 'application/json; charset=utf-8' }),
     })
