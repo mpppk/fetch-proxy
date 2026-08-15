@@ -9,8 +9,9 @@ CORS 付きの汎用 fetch プロキシ (Cloudflare Workers + Hono)。任意の 
 
 * **CORS 対応** — `Access-Control-Allow-Origin: *`, `GET/HEAD/OPTIONS` を許可
 * **`as=html`** — オリジン HTML をそのままプロキシ（`Content-Type` 維持、無い場合は `text/html; charset=utf-8`）
-* **`as=title`** — `og:title` を優先、なければ `<title>` を抽出して `text/plain` で返却 (`src/index.ts:49`)
+* **`as=title`** — `og:title` を優先、なければ `<title>` を抽出して `text/plain` で返却
 * **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) を JSON で返却
+* **SPA フォールバック** — `as=title` / `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、`quickAction('content')` (Browser Rendering) でレンダリング後の DOM から再抽出
 * **`as=md`** — `defuddle` (`defuddle/node`) で本文抽出 → Markdown 変換、失敗時は `BROWSER` binding の `quickAction('markdown')` (Browser Rendering) にフォールバック (`src/index.ts:133`)
 * **クエリ転送** — `as` 以外の全クエリを `https://<host>/<path>?<forwarded>` に転送
 * **`https://` プレフィックス許容** — `/https://example.com/foo` や `/http://example.com/foo` も自動剥離
@@ -125,6 +126,10 @@ curl https://fetch.nibo.sh/example.com/?as=title
 curl https://fetch.nibo.sh/example.com/?as=meta
 # => {"title":"Example Domain","ogTitle":"","ogDescription":"","ogSiteName":"","ogImage":"","description":""}
 
+# 3b. CSR の SPA でも Browser Rendering フォールバックでタイトルが取れる
+curl https://fetch.nibo.sh/z.ai/blog/glm-5.3?as=title
+# => GLM-5.3: Frontier Coding with Emergent Cyber Capabilities
+
 # 4. Markdown (defuddle → Browser fallback)
 curl https://fetch.nibo.sh/example.com/articles/123?as=md
 # => # Article Title
@@ -196,6 +201,8 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
 * **Polyfill:** `workerd` では `document`/`DOMParser` が無いため、`linkedom` の `parseHTML` でグローバルを polyfill してから `defuddle/node` を動的 import (`src/index.ts:6`, `src/index.ts:77`)
 * **meta 抽出:** `extractMeta()` が `<title>` と各 OGP を一括抽出。各キーは `meta[property=...]` → `meta[name=...]` → エスケープ付き `property` の順で探索し、HTML パース失敗時は regex フォールバック
 * **title 抽出:** `extractTitle()` は `extractMeta()` の結果から `ogTitle` → `title` の優先順位で返す（従来の挙動どおり）
+* **SPA フォールバック:** オリジン HTML はレンダリング前の状態なので、CSR の SPA（例: `z.ai/blog/*`）は `<div id="root"></div>` だけを返しタイトルが取れない。`needsRendering()`（`og:title` も `<title>` も空）が真なら `browserMeta()` が `quickAction('content')` でレンダリング後の HTML を取得し、同じ `extractMeta()` を適用する。`<title>` 要素が無いまま `document.title` だけ設定する SPA のために、Browser Rendering の `meta.title` も併用。取得済みの値は `mergeMeta()` でオリジン HTML 側を優先し、空欄のみ埋める
+* **SPA フォールバックのコスト:** ヘッド情報しか要らないため `waitUntil: 'load'` + 画像/メディア/フォント/CSS を `rejectResourceTypes` でブロックして待ち時間を削減。それでもコールドで数秒かかるので `cacheTTL: 600` を指定し、リトライを安く済ませる。`og:title` か `<title>` がある通常のページではブラウザを一切起動しない
 * **md 変換:** `Defuddle(document, url, {markdown:true})` の `wordCount <10 && md.length <50` または `md.length <20` は失敗扱い → Browser Rendering へ (`src/index.ts:113`, `src/index.ts:315`)
 * **Browser Rendering:** `env.BROWSER.quickAction('markdown', {url, gotoOptions:{waitUntil:'networkidle0'}})` (`src/index.ts:136`)、JSON `{success, result}` をパース
 
