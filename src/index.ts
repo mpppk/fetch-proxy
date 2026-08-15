@@ -113,10 +113,6 @@ function extractMeta(html: string): PageMeta {
   }
 }
 
-function extractTitle(meta: PageMeta): string {
-  return meta.ogTitle || meta.title || ''
-}
-
 // A page whose HTML carries neither og:title nor <title> is almost always a
 // client-side rendered SPA: the origin serves an empty shell and the real head
 // is written by JS. Signals that Browser Rendering is worth the round trip.
@@ -199,8 +195,8 @@ const BROWSER_META_CACHE_TTL_SECONDS = 600
 
 /**
  * Re-fetch the page through Browser Rendering and extract its metadata from the
- * rendered DOM. Used by as=title / as=meta when the origin HTML has no title at
- * all, which is the case for client-side rendered SPAs.
+ * rendered DOM. Used by as=meta when the origin HTML has no title at all, which
+ * is the case for client-side rendered SPAs.
  *
  * Images, media, fonts and stylesheets are blocked: nothing is painted here, and
  * skipping them makes `networkidle0` settle noticeably sooner.
@@ -288,7 +284,7 @@ app.get('/', (c) => {
   // if root accessed without target, show usage
   // but if user explicitly wants to fetch root with as param? Still show help
   if (url.pathname === '/' && !url.searchParams.has('as') && url.searchParams.toString() === '') {
-    return c.text('fetch-proxy: use /<host>/<path>?as=html|title|meta|md', 200, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
+    return c.text('fetch-proxy: use /<host>/<path>?as=html|meta|md', 200, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
   }
   // otherwise fall through to proxy logic? For '/' we treat as missing target
   return c.text('missing target host: use /<host>/<path>', 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
@@ -338,8 +334,14 @@ app.on(['GET', 'HEAD'], '/*', async (c) => {
     return c.text('as parameter cannot be specified multiple times', 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
   }
   let as = asValues[0] ?? 'html'
-  if (!['html', 'title', 'meta', 'md'].includes(as)) {
-    return c.text(`invalid as value: ${as}. allowed: html, title, meta, md`, 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
+  // as=title was removed: it only ever returned `ogTitle || title` from the same
+  // extraction as=meta already does, so point callers at their replacement
+  // rather than letting them read it as a typo.
+  if (as === 'title') {
+    return c.text('as=title has been removed. use as=meta and read ogTitle, falling back to title', 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
+  }
+  if (!['html', 'meta', 'md'].includes(as)) {
+    return c.text(`invalid as value: ${as}. allowed: html, meta, md`, 400, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }))
   }
 
   // Build forward query (exclude 'as')
@@ -401,22 +403,16 @@ app.on(['GET', 'HEAD'], '/*', async (c) => {
     })
   }
 
-  // as=title / as=meta : extract <title> and OGP metadata, falling back to
-  // Browser Rendering when the origin HTML has no title (client-side rendered
-  // SPAs serve an empty shell, so string parsing alone yields nothing).
-  if (as === 'title' || as === 'meta') {
+  // as=meta : extract <title> and OGP metadata, falling back to Browser
+  // Rendering when the origin HTML has no title (client-side rendered SPAs
+  // serve an empty shell, so string parsing alone yields nothing).
+  if (as === 'meta') {
     const html = await originRes.text()
     let meta = extractMeta(html)
 
     if (needsRendering(meta)) {
       const rendered = await browserMeta(c.env, targetUrl)
       if (rendered) meta = mergeMeta(meta, rendered)
-    }
-
-    if (as === 'title') {
-      return new Response(extractTitle(meta), {
-        headers: withCors({ 'Content-Type': 'text/plain; charset=utf-8' }),
-      })
     }
 
     return new Response(JSON.stringify(meta), {

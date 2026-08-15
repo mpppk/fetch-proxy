@@ -1,10 +1,9 @@
-npm warn exec The following package was not found and will be installed: js-yaml@5.3.0
 {
   "openapi": "3.1.0",
   "info": {
     "title": "fetch-proxy",
     "version": "1.0.0",
-    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|title|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=title` — `og:title` 優先、なければ `<title>` を抽出して `text/plain` で返却\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=title` / `as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
+    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
     "contact": {
       "name": "mpppk",
       "url": "https://github.com/mpppk/fetch-proxy"
@@ -65,7 +64,7 @@ npm warn exec The following package was not found and will be installed: js-yaml
               "text/plain": {
                 "schema": {
                   "type": "string",
-                  "example": "fetch-proxy: use /<host>/<path>?as=html|title|meta|md"
+                  "example": "fetch-proxy: use /<host>/<path>?as=html|meta|md"
                 }
               }
             }
@@ -94,7 +93,7 @@ npm warn exec The following package was not found and will be installed: js-yaml
         "tags": [
           "proxy"
         ],
-        "summary": "Proxy GET (html | title | meta | md)",
+        "summary": "Proxy GET (html | meta | md)",
         "operationId": "proxyGet",
         "parameters": [
           {
@@ -106,7 +105,6 @@ npm warn exec The following package was not found and will be installed: js-yaml
               "type": "string",
               "enum": [
                 "html",
-                "title",
                 "meta",
                 "md"
               ],
@@ -128,7 +126,7 @@ npm warn exec The following package was not found and will be installed: js-yaml
         ],
         "responses": {
           "200": {
-            "description": "成功。`as` により Content-Type が変わる:\n* `html` → `text/html; charset=utf-8`\n* `title` → `text/plain; charset=utf-8`\n* `meta` → `application/json; charset=utf-8`\n* `md` → `text/markdown; charset=utf-8`\nオリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。\n",
+            "description": "成功。`as` により Content-Type が変わる:\n* `html` → `text/html; charset=utf-8`\n* `meta` → `application/json; charset=utf-8`\n* `md` → `text/markdown; charset=utf-8`\nオリジンがエラーステータスでない限り 200。オリジンが 4xx/5xx の場合はそのステータスをそのまま中継する（下記 `4XX`/`5XX` 参照）。\n",
             "headers": {
               "Access-Control-Allow-Origin": {
                 "$ref": "#/components/headers/CorsAllowOrigin"
@@ -152,17 +150,6 @@ npm warn exec The following package was not found and will be installed: js-yaml
                   "html": {
                     "summary": "as=html",
                     "value": "<!DOCTYPE html><html><head><title>Example</title></head><body>...</body></html>"
-                  }
-                }
-              },
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                },
-                "examples": {
-                  "title": {
-                    "summary": "as=title",
-                    "value": "Example Domain"
                   }
                 }
               },
@@ -258,7 +245,6 @@ npm warn exec The following package was not found and will be installed: js-yaml
               "type": "string",
               "enum": [
                 "html",
-                "title",
                 "meta",
                 "md"
               ],
@@ -393,7 +379,7 @@ npm warn exec The following package was not found and will be installed: js-yaml
               },
               "invalidAs": {
                 "summary": "invalid as value",
-                "value": "invalid as value: foo. allowed: html, title, meta, md"
+                "value": "invalid as value: foo. allowed: html, meta, md"
               }
             }
           }
@@ -478,7 +464,7 @@ npm warn exec The following package was not found and will be installed: js-yaml
         "properties": {
           "message": {
             "type": "string",
-            "example": "invalid as value: foo. allowed: html, title, meta, md"
+            "example": "invalid as value: foo. allowed: html, meta, md"
           }
         }
       }
