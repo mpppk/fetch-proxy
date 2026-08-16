@@ -94,8 +94,15 @@ check_status OPTIONS "/example.com/" 204
 # --- Error handling ---
 check_status GET "/" 200 # root with no target: help text (200) - note: GET / is help
 # missing target on proxied root path is tested as GET / with no host -> 200 help, not 400
-# But GET /?as=html should be 400 if as is present? Let's test proxy with invalid host
-check_status GET "/invalid host" 400
+# A host that cannot be a host must be rejected. The space is sent encoded because
+# a literal one never reaches the Worker: curl refuses the URL outright (exit 3,
+# reported here as status 000), so the unencoded form tests nothing.
+#
+# %20 lands on the `new URL(targetUrl)` guard rather than the `includes(" ")` one
+# — pathname keeps the escape, so that check sees no space — hence
+# "invalid target URL" and not "invalid target host". The latter is only
+# reachable through app.request(), and src/index.test.ts covers it there.
+check_body GET "/invalid%20host" 400 "invalid target URL"
 
 # --- as parameter validation ---
 check_body GET "/example.com/?as=invalid" 400 "invalid as value"
@@ -123,7 +130,14 @@ check_body GET "/www.youtube.com/watch?v=jNQXAC9IVRw&as=meta" 200 "Me at the zoo
 check_body GET "/example.com/?as=title" 400 "as=title has been removed"
 
 # --- Proxy: md ---
-check_body GET "/example.com/?as=md" 200 "Example Domain"
+# Not "Example Domain": defuddle extracts the article body and hands the title
+# back separately as result.title, which as=md does not emit, so the heading is
+# never in the markdown. The prose underneath it is not a safe substitute either
+# — IANA has already rewritten it once. "domain" is the one word that has
+# survived every revision of the page, and asserting it still separates real
+# converted markdown from an empty body or a relayed error page, which is all
+# this check is for; the status and text/markdown Content-Type are checked below.
+check_body GET "/example.com/?as=md" 200 "domain"
 check_header GET "/example.com/?as=md" 200 "Content-Type" "text/markdown"
 check_header GET "/example.com/?as=md" 200 "Access-Control-Allow-Origin" "*"
 
