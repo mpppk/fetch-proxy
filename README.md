@@ -11,6 +11,7 @@ CORS 付きの汎用 fetch プロキシ (Cloudflare Workers + Hono)。任意の 
 * **`as=html`** — オリジン HTML をそのままプロキシ（`Content-Type` 維持、無い場合は `text/html; charset=utf-8`）
 * **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) を JSON で返却
 * **SPA フォールバック** — `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、`quickAction('content')` (Browser Rendering) でレンダリング後の DOM から再抽出
+* **YouTube 対応** — `as=meta` で動画 URL (`youtu.be/<id>` / `watch?v=` / `shorts` / `live` / `embed`) は oEmbed から動画タイトルとサムネイルを取得（YouTube は Worker からのアクセスに CAPTCHA 画面を返し、HTML からはタイトルが取れないため）
 * **`as=md`** — `defuddle` (`defuddle/node`) で本文抽出 → Markdown 変換、失敗時は `BROWSER` binding の `quickAction('markdown')` (Browser Rendering) にフォールバック (`src/index.ts:133`)
 * **クエリ転送** — `as` 以外の全クエリを `https://<host>/<path>?<forwarded>` に転送
 * **`https://` プレフィックス許容** — `/https://example.com/foo` や `/http://example.com/foo` も自動剥離
@@ -119,23 +120,27 @@ curl https://fetch.nibo.sh/example.com/?as=meta
 curl https://fetch.nibo.sh/z.ai/blog/glm-5.3?as=meta
 # => {"title":"GLM-5.3: Frontier Coding with Emergent Cyber Capabilities",...}
 
-# 4. Markdown (defuddle → Browser fallback)
+# 4. YouTube は oEmbed 経由で動画タイトルが取れる
+curl "https://fetch.nibo.sh/youtu.be/jNQXAC9IVRw?as=meta"
+# => {"title":"Me at the zoo - YouTube","ogTitle":"Me at the zoo","ogDescription":"","ogSiteName":"YouTube","ogImage":"https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg","description":""}
+
+# 5. Markdown (defuddle → Browser fallback)
 curl https://fetch.nibo.sh/example.com/articles/123?as=md
 # => # Article Title
 #    Article body...
 
-# 5. クエリ転送
+# 6. クエリ転送
 curl "https://fetch.nibo.sh/example.com/search?q=cloudflare&lang=ja&as=html"
 # => https://example.com/search?q=cloudflare&lang=ja を取得
 
-# 6. https:// プレフィックス付き入力
+# 7. https:// プレフィックス付き入力
 curl https://fetch.nibo.sh/https://example.com/foo?as=meta
 
-# 7. CORS確認
+# 8. CORS確認
 curl -i -X OPTIONS https://fetch.nibo.sh/example.com/ -H "Origin: https://example.com"
 # => 204 + CORS headers
 
-# 8. ブラウザ JS
+# 9. ブラウザ JS
 const md = await fetch("https://fetch.nibo.sh/example.com/blog?as=md").then(r => {
   if (!r.ok) throw new Error(r.status);
   return r.text();
@@ -191,6 +196,7 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
 * **meta 抽出:** `extractMeta()` が `<title>` と各 OGP を一括抽出。各キーは `meta[property=...]` → `meta[name=...]` → エスケープ付き `property` の順で探索し、HTML パース失敗時は regex フォールバック
 * **SPA フォールバック:** オリジン HTML はレンダリング前の状態なので、CSR の SPA（例: `z.ai/blog/*`）は `<div id="root"></div>` だけを返しタイトルが取れない。`needsRendering()`（`og:title` も `<title>` も空）が真なら `browserMeta()` が `quickAction('content')` でレンダリング後の HTML を取得し、同じ `extractMeta()` を適用する。`<title>` 要素が無いまま `document.title` だけ設定する SPA のために、Browser Rendering の `meta.title` も併用。取得済みの値は `mergeMeta()` でオリジン HTML 側を優先し、空欄のみ埋める
 * **SPA フォールバックのコスト:** ヘッド情報しか要らないため `waitUntil: 'load'` + 画像/メディア/フォント/CSS を `rejectResourceTypes` でブロックして待ち時間を削減。それでもコールドで数秒かかるので `cacheTTL: 600` を指定し、リトライを安く済ませる。`og:title` か `<title>` がある通常のページではブラウザを一切起動しない
+* **YouTube (oEmbed):** YouTube は Worker（データセンター IP）からの watch ページ取得に reCAPTCHA 画面 (429) か「YouTube」とだけ書かれた JS シェルを返すため、オリジン HTML からも Browser Rendering からも動画タイトルが取れない。`as=meta` では origin fetch の前に `youtubeWatchUrl()` が動画 URL を `https://www.youtube.com/watch?v=<id>` に正規化し（`youtu.be` / `shorts` / `live` / `embed` / `/v/` / `m.` / `music.` / `?si=` 除去に対応）、キー不要の `https://www.youtube.com/oembed` から取得する (`src/youtube.ts`)。オリジンの 429 はこの分岐より手前で中継されてしまうので、順序が重要。非公開・削除済み動画やチャンネル/プレイリスト URL では従来どおりオリジン HTML にフォールバックする
 * **md 変換:** `Defuddle(document, url, {markdown:true})` の `wordCount <10 && md.length <50` または `md.length <20` は失敗扱い → Browser Rendering へ (`src/index.ts:113`, `src/index.ts:315`)
 * **Browser Rendering:** `env.BROWSER.quickAction('markdown', {url, gotoOptions:{waitUntil:'networkidle0'}})` (`src/index.ts:136`)、JSON `{success, result}` をパース
 

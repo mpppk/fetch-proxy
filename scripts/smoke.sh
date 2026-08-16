@@ -112,6 +112,13 @@ check_body GET "/example.com/?as=meta" 200 "Example Domain"
 check_header GET "/example.com/?as=meta" 200 "Content-Type" "application/json"
 check_header GET "/example.com/?as=meta" 200 "Access-Control-Allow-Origin" "*"
 
+# --- Proxy: meta for YouTube (oEmbed) ---
+# YouTube serves Workers a CAPTCHA interstitial instead of the watch page, so
+# the title has to come from oEmbed. jNQXAC9IVRw is the oldest video on the site
+# ("Me at the zoo"), about as unlikely to disappear as a YouTube URL gets.
+check_body GET "/youtu.be/jNQXAC9IVRw?as=meta" 200 "Me at the zoo"
+check_body GET "/www.youtube.com/watch?v=jNQXAC9IVRw&as=meta" 200 "Me at the zoo"
+
 # --- as=title removed ---
 check_body GET "/example.com/?as=title" 400 "as=title has been removed"
 
