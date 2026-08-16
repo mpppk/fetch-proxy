@@ -269,6 +269,34 @@ async function browserMeta(
   }
 }
 
+async function browserHtml(
+  env: Bindings,
+  targetUrl: string,
+): Promise<string | null> {
+  if (!env.BROWSER) return null;
+  try {
+    const res = await env.BROWSER.quickAction("content", {
+      url: targetUrl,
+      gotoOptions: { waitUntil: "load" },
+      rejectResourceTypes: ["image", "media", "font", "stylesheet"],
+      bestAttempt: true,
+      cacheTTL: BROWSER_META_CACHE_TTL_SECONDS,
+    } as any);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      success: boolean;
+      result?: string;
+    };
+    if (!data.success || typeof data.result !== "string") return null;
+    const html = data.result.trim();
+    if (!html) return null;
+    return html;
+  } catch (e) {
+    console.error("browserHtml error:", e);
+    return null;
+  }
+}
+
 async function browserMarkdown(
   env: Bindings,
   targetUrl: string,
@@ -508,8 +536,41 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
     );
   }
 
-  // If origin returns error status, proxy it with CORS (for html mode we proxy as is, for others we still proxy error)
+  // If origin returns error status, proxy it with CORS.
+  // For 403/429 (bot-blocking) try Browser Rendering so as=meta/as=md/as=html
+  // can still succeed via a real Chrome. This is the path that fixes Medium
+  // (403 with the bot UA) without changing the unconditional !ok proxy for
+  // other statuses.
   if (!originRes.ok) {
+    const status = originRes.status;
+    if ((status === 403 || status === 429) && (c.env as Bindings)?.BROWSER) {
+      if (as === "meta") {
+        const rendered = await browserMeta(c.env as Bindings, targetUrl);
+        if (rendered && (rendered.title || rendered.ogTitle)) {
+          return new Response(JSON.stringify(rendered), {
+            headers: withCors({
+              "Content-Type": "application/json; charset=utf-8",
+            }),
+          });
+        }
+      } else if (as === "md") {
+        const brMarkdown = await browserMarkdown(c.env as Bindings, targetUrl);
+        if (brMarkdown && brMarkdown.trim().length > 0) {
+          return new Response(brMarkdown, {
+            headers: withCors({
+              "Content-Type": "text/markdown; charset=utf-8",
+            }),
+          });
+        }
+      } else if (as === "html") {
+        const html = await browserHtml(c.env as Bindings, targetUrl);
+        if (html) {
+          return new Response(html, {
+            headers: withCors({ "Content-Type": "text/html; charset=utf-8" }),
+          });
+        }
+      }
+    }
     const body = await originRes.text();
     const contentType =
       originRes.headers.get("Content-Type") || "text/plain; charset=utf-8";
