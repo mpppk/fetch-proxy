@@ -205,6 +205,7 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
   "workers_dev": true,
   "routes": [{ "pattern": "fetch.nibo.sh/*", "zone_name": "nibo.sh" }],
   "observability": {
+    "enabled": true,
     "logs": { "enabled": true, "head_sampling_rate": 1 },
     "traces": { "enabled": true, "head_sampling_rate": 1 }
   }
@@ -218,7 +219,12 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
 * `head_sampling_rate` は両方とも `1` (100%)。個人利用の低トラフィックなので全件取れる。転送量が増えたら下げる
 * ログの保持は 7 日。それ以上残したい場合は OpenTelemetry export か Logpush を足す
 * Traces は `observability.enabled` では有効にならず、`observability.traces.enabled` を明示する必要がある (2026-08 時点)
-* 設定は Worker の**デプロイ時**に反映される。変更したら `main` に push して Workers Builds を回す
+* `observability` は**スクリプト単位の設定**で、`wrangler deploy`（= `main` の本番ビルド）でしか反映されない。ブランチのプレビュー (`wrangler versions upload`) では適用されないので、PR のプレビュー URL を叩いてもログは出ない
+* 反映後の確認は API でもできる:
+  ```sh
+  curl -s "https://api.cloudflare.com/client/v4/accounts/<account_id>/workers/scripts/fetch-proxy/settings" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq .result.observability
+  ```
 
 ## 実装メモ
 

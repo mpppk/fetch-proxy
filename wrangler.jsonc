@@ -16,7 +16,9 @@
   ],
   // Workers Logs / Workers Traces をダッシュボードで確認できるようにする。
   // head_sampling_rate は 1 (100%)。個人利用の低トラフィックなので全件取得する。
+  // traces は observability.enabled では有効にならないので明示する (2026-08 時点)。
   "observability": {
+    "enabled": true,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1
