@@ -163,9 +163,26 @@ Swagger UI / Scalar / Stoplight などでそのまま読み込めます。
 ```sh
 npm install
 npm run dev        # wrangler dev (ローカル)
-npm run deploy     # wrangler deploy --minify → fetch.nibo.sh
+npm run deploy     # wrangler deploy --minify → fetch.nibo.sh (手動デプロイ。通常は CD 任せ)
 npm run cf-typegen # wrangler types --env-interface CloudflareBindings → worker-configuration.d.ts
 ```
+
+### デプロイ (CD)
+
+`main` への push で **Cloudflare Workers Builds** がビルドとデプロイを行う。設定はリポジトリではなくダッシュボード側 (**Workers & Pages → fetch-proxy → Settings → Build**) にあるため、変更時はそちらを見る。
+
+| 設定 | 値 | 理由 |
+|------|-----|------|
+| Branch control (production branch) | `main` | |
+| Deploy command | `bun run deploy` | 既定の `npx wrangler deploy` だと `--minify` が付かない |
+| Worker 名 | `fetch-proxy` | `wrangler.jsonc` の `name` と一致していないとビルドが失敗する |
+
+注意点:
+
+* リポジトリを接続しただけでは現在の HEAD は遡ってデプロイされない。**push イベントか、ダッシュボードからの手動ビルドが要る**
+* 「Builds for non-production branches」を有効にすると、`main` 以外への push でも `wrangler versions upload` (プレビュー版) が走る
+* GitHub Actions (`.github/workflows/ci.yml`) は **CI のみでデプロイはしない**。デプロイ元を二重にしないため、`main` への push でも Actions からは何もデプロイされない
+* デプロイ後の健全性は毎時の `Smoke Test` ワークフローが見る。手元で確認したい場合は `bun run smoke [BASE_URL]`
 
 ### 型
 
