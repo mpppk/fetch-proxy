@@ -203,9 +203,22 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
   "compatibility_flags": ["nodejs_compat"],
   "browser": { "binding": "BROWSER" },
   "workers_dev": true,
-  "routes": [{ "pattern": "fetch.nibo.sh/*", "zone_name": "nibo.sh" }]
+  "routes": [{ "pattern": "fetch.nibo.sh/*", "zone_name": "nibo.sh" }],
+  "observability": {
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 1 }
+  }
 }
 ```
+
+### 監視 (Workers Logs / Workers Traces)
+
+`observability` で Workers Logs と Workers Traces を有効にしている。ダッシュボードの **Workers & Pages → fetch-proxy → Observability** から、invocation ログ・`console.*` の出力・例外と、リクエストごとのスパン (origin への `fetch`、Browser Rendering 呼び出しなど) を確認できる。
+
+* `head_sampling_rate` は両方とも `1` (100%)。個人利用の低トラフィックなので全件取れる。転送量が増えたら下げる
+* ログの保持は 7 日。それ以上残したい場合は OpenTelemetry export か Logpush を足す
+* Traces は `observability.enabled` では有効にならず、`observability.traces.enabled` を明示する必要がある (2026-08 時点)
+* 設定は Worker の**デプロイ時**に反映される。変更したら `main` に push して Workers Builds を回す
 
 ## 実装メモ
 

@@ -13,7 +13,19 @@
       "pattern": "fetch.nibo.sh/*",
       "zone_name": "nibo.sh"
     }
-  ]
+  ],
+  // Workers Logs / Workers Traces をダッシュボードで確認できるようにする。
+  // head_sampling_rate は 1 (100%)。個人利用の低トラフィックなので全件取得する。
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  }
   // "compatibility_flags": [
   //   "nodejs_compat"
   // ],
@@ -41,9 +53,5 @@
   // ],
   // "ai": {
   //   "binding": "AI"
-  // },
-  // "observability": {
-  //   "enabled": true,
-  //   "head_sampling_rate": 1
   // }
 }
