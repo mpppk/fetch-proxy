@@ -9,7 +9,7 @@ CORS 付きの汎用 fetch プロキシ (Cloudflare Workers + Hono)。任意の 
 
 * **CORS 対応** — `Access-Control-Allow-Origin: *`, `GET/HEAD/OPTIONS` を許可
 * **`as=html`** — オリジン HTML をそのままプロキシ（`Content-Type` 維持、無い場合は `text/html; charset=utf-8`）
-* **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) を JSON で返却
+* **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) に加え、リダイレクト追従後の最終URL (`finalUrl`) を JSON で返却
 * **SPA フォールバック** — `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、`quickAction('content')` (Browser Rendering) でレンダリング後の DOM から再抽出
 * **YouTube 対応** — `as=meta` で動画 URL (`youtu.be/<id>` / `watch?v=` / `shorts` / `live` / `embed`) は oEmbed から動画タイトルとサムネイルを取得（YouTube は Worker からのアクセスに CAPTCHA 画面を返し、HTML からはタイトルが取れないため）
 * **`as=md`** — `defuddle` (`defuddle/node`) で本文抽出 → Markdown 変換、失敗時は `BROWSER` binding の `quickAction('markdown')` (Browser Rendering) にフォールバック (`src/index.ts:133`)

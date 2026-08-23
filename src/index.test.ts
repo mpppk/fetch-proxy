@@ -62,6 +62,49 @@ describe("fetch-proxy", () => {
     vi.unstubAllGlobals();
   });
 
+  it("GET /example.com/?as=meta falls back to the requested URL for finalUrl when the response has none (mocked Response)", async () => {
+    const html = `<html><head><title>A</title></head><body></body></html>`;
+    // new Response() carries an empty .url, like hand-built responses in tests
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(html, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/example.com/page?as=meta");
+    expect(res.status).toBe(200);
+    const meta = (await res.json()) as { finalUrl: string };
+    expect(meta.finalUrl).toBe("https://example.com/page");
+    vi.unstubAllGlobals();
+  });
+
+  it("GET /share.google/abc?as=meta reports the redirect destination as finalUrl", async () => {
+    const html = `<html><head><title>Destination</title></head><body></body></html>`;
+    // A real redirected fetch exposes the landing URL on response.url
+    const redirected = {
+      ok: true,
+      status: 200,
+      url: "https://maps.example.com/place/123",
+      headers: new Headers({ "Content-Type": "text/html; charset=utf-8" }),
+      text: () => Promise.resolve(html),
+    } as unknown as Response;
+    const fetchMock = vi.fn().mockResolvedValue(redirected);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/share.google/abc?as=meta");
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://share.google/abc",
+      expect.anything(),
+    );
+    const meta = (await res.json()) as { finalUrl: string; title: string };
+    expect(meta.finalUrl).toBe("https://maps.example.com/place/123");
+    expect(meta.title).toBe("Destination");
+    vi.unstubAllGlobals();
+  });
+
   it("GET /example.com/?as=html proxies html with CORS", async () => {
     const html =
       "<!DOCTYPE html><html><head><title>Hi</title></head><body>hello world</body></html>";
@@ -136,6 +179,7 @@ describe("fetch-proxy", () => {
       ogSiteName: "YouTube",
       ogImage: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
       description: "",
+      finalUrl: "https://youtu.be/dQw4w9WgXcQ?si=tracking",
     });
 
     // The watch page itself is never requested: YouTube answers Workers with a
