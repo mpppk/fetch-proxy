@@ -3,7 +3,7 @@
   "info": {
     "title": "fetch-proxy",
     "version": "1.0.0",
-    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n\nYouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、\n`as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。\nYouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
+    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n\nオリジンがリダイレクトする場合（例: Google の共有短縮URL `share.google/*`）、\nプロキシはリダイレクトを追従して最終ページを取得し、その最終URLを\nレスポンスの `finalUrl` として返します。\n\nYouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、\n`as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。\nYouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
     "contact": {
       "name": "mpppk",
       "url": "https://github.com/mpppk/fetch-proxy"
@@ -166,7 +166,8 @@
                       "ogDescription": "just setting up my twttr",
                       "ogSiteName": "X (formerly Twitter)",
                       "ogImage": "https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH_400x400.jpg",
-                      "description": "just setting up my twttr"
+                      "description": "just setting up my twttr",
+                      "finalUrl": "https://x.com/jack/status/20"
                     }
                   }
                 }
@@ -424,9 +425,15 @@
           "ogDescription",
           "ogSiteName",
           "ogImage",
-          "description"
+          "description",
+          "finalUrl"
         ],
         "properties": {
+          "finalUrl": {
+            "type": "string",
+            "description": "リダイレクトを追従した後に実際に到達した最終URL。\nリダイレクトが観測できない場合（oEmbed 経由やモック等）は要求されたURLを返す。\n",
+            "example": "https://x.com/jack/status/20"
+          },
           "title": {
             "type": "string",
             "description": "`<title>` のテキスト",
