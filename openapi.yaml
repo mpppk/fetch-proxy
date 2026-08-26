@@ -11,8 +11,12 @@ info:
     * `as=meta` — `<title>` と OGP メタ情報を JSON で返却
 
     `as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合
-    （クライアントサイドレンダリングの SPA など）、Browser Rendering
-    (`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。
+    （クライアントサイドレンダリングの SPA など）、defuddle の JSON-LD / schema.org 抽出、
+    続いて Browser Rendering (`quickAction('content')`) でレンダリング後の DOM から再抽出します。
+
+    取得経路は `renderer` (短縮形 `r`) で優先順に指定できます。既定は `fetch,chromium` で、
+    先頭から順に試して失敗したら次へフォールバックします。実際に応答したレンダラは
+    `X-Renderer`、試行順と結果は `X-Renderer-Chain` レスポンスヘッダで返ります。
 
     オリジンがリダイレクトする場合（例: Google の共有短縮URL `share.google/*`）、
     プロキシはリダイレクトを追従して最終ページを取得し、その最終URLを
@@ -23,7 +27,7 @@ info:
     YouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。
     * `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック
 
-    追加のクエリパラメータは `as` と `browser` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。
+    追加のクエリパラメータは `as` / `renderer` / `r` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。
     `https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。
   contact:
     name: mpppk
@@ -71,7 +75,7 @@ paths:
             text/plain:
               schema:
                 type: string
-                example: 'fetch-proxy: use /<host>/<path>?as=html|meta|md&browser=chromium|kitesurf'
+                example: 'fetch-proxy: use /<host>/<path>?as=html|meta|md&r=fetch,chromium,kitesurf'
         '400':
           $ref: '#/components/responses/BadRequest'
 
@@ -106,24 +110,51 @@ paths:
             enum: [html, meta, md]
             default: html
           example: md
-        - name: browser
+        - name: renderer
           in: query
           required: false
           description: |
-            Browser Rendering フォールバック（SPA の `as=meta` 再取得、403/429 時の再レンダリング、`as=md` フォールバック）で使うブラウザエンジン。
-            * `chromium` (default) — `BROWSER` binding の `quickAction()`
-            * `kitesurf` — Cloudflare の軽量 agent-first ブラウザ。Browser Run REST API (`?browser=kitesurf`) 経由で呼び出すため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` の設定が必要。未設定やREST呼び出し失敗時は chromium binding にフォールバックする。
-            複数回指定すると 400。転送先 URL には付与されない。
+            取得経路を優先順に並べたチェーン。先頭から順に試し、失敗したら次へフォールバックする。
+            省略時は `fetch,chromium`。
+
+            * `fetch` — オリジンへの素の HTTP GET。`as=html` はそのまま返し、`as=meta` は
+              `extractMeta()`（空なら defuddle の JSON-LD / schema.org 抽出）、`as=md` は defuddle で変換する。
+              オリジンが 403/429 を返した場合のみチェーンを継続し、それ以外の非 2xx はそのまま中継する。
+            * `chromium` — Browser Run の標準エンジン。`BROWSER` binding 経由。
+            * `kitesurf` — Cloudflare の軽量 agent-first ブラウザ。Browser Run REST API
+              (`?browser=kitesurf`) 経由でのみ選択できるため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要。
+              未設定なら失敗として次のレンダラに進む（暗黙に chromium へは落ちない）。
+
+            繰り返し指定 (`?r=kitesurf&r=chromium`)・カンマ区切り (`?r=kitesurf,chromium`)・両者の混在のいずれも可で、
+            指定順がそのままチェーン順になる。同じレンダラの重複指定は 400。
+            短縮形 `r` と同義（両方を同時に指定すると 400）。転送先 URL には付与されない。
+          style: form
+          explode: true
           schema:
-            type: string
-            enum: [chromium, kitesurf]
-            default: chromium
-          example: kitesurf
+            type: array
+            items:
+              type: string
+              enum: [fetch, chromium, kitesurf]
+            default: [fetch, chromium]
+          example: [kitesurf, chromium]
+        - name: r
+          in: query
+          required: false
+          description: '`renderer` の短縮形。両方を同時に指定すると 400。'
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [fetch, chromium, kitesurf]
+            default: [fetch, chromium]
+          example: [kitesurf, chromium]
         - name: forwardedQuery
           in: query
           required: false
           description: |
-            `as` と `browser` 以外の任意のクエリパラメータはそのまま転送先 URL に付与される。
+            `as` / `renderer` / `r` 以外の任意のクエリパラメータはそのまま転送先 URL に付与される。
             例: `/example.com/search?q=hello&lang=ja&as=md` → `https://example.com/search?q=hello&lang=ja`
           schema:
             type: string
@@ -144,8 +175,14 @@ paths:
               $ref: '#/components/headers/CorsAllowMethods'
             Access-Control-Allow-Headers:
               $ref: '#/components/headers/CorsAllowHeaders'
+            Access-Control-Expose-Headers:
+              $ref: '#/components/headers/CorsExposeHeaders'
             Content-Type:
               $ref: '#/components/headers/ContentType'
+            X-Renderer:
+              $ref: '#/components/headers/XRenderer'
+            X-Renderer-Chain:
+              $ref: '#/components/headers/XRendererChain'
           content:
             text/html:
               schema:
@@ -189,6 +226,10 @@ paths:
               $ref: '#/components/headers/CorsAllowOrigin'
             Content-Type:
               $ref: '#/components/headers/ContentType'
+            X-Renderer:
+              $ref: '#/components/headers/XRenderer'
+            X-Renderer-Chain:
+              $ref: '#/components/headers/XRendererChain'
           content:
             text/plain:
               schema:
@@ -218,13 +259,28 @@ paths:
             type: string
             enum: [html, meta, md]
             default: html
-        - name: browser
+        - name: renderer
           in: query
           required: false
+          style: form
+          explode: true
           schema:
-            type: string
-            enum: [chromium, kitesurf]
-            default: chromium
+            type: array
+            items:
+              type: string
+              enum: [fetch, chromium, kitesurf]
+            default: [fetch, chromium]
+        - name: r
+          in: query
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [fetch, chromium, kitesurf]
+            default: [fetch, chromium]
       responses:
         '200':
           description: HEAD success (headers only, no body per HTTP spec)
@@ -284,6 +340,27 @@ components:
       schema:
         type: string
         example: 'text/html; charset=utf-8'
+    CorsExposeHeaders:
+      description: Response headers a cross-origin caller is allowed to read
+      schema:
+        type: string
+        example: 'X-Renderer, X-Renderer-Chain'
+    XRenderer:
+      description: |
+        レンダラチェーンのうち実際に結果を返したもの。`as=meta` の YouTube oEmbed 経路は `oembed`。
+        全レンダラが失敗した場合は付与されない。
+      schema:
+        type: string
+        example: 'kitesurf'
+    XRendererChain:
+      description: |
+        試行したレンダラと結果を試行順にカンマ区切りで列挙する。
+        `ok` = 応答した / `empty` = 正常終了したが中身が空（チェーンは継続するが、
+        最後まで何も見つからなければこの結果を返す） / `failed` = エラーまたは結果なし。
+        指定されても到達しなかったレンダラは現れない。
+      schema:
+        type: string
+        example: 'fetch=empty,kitesurf=ok'
 
   responses:
     BadRequest:
@@ -315,30 +392,44 @@ components:
             invalidAs:
               summary: invalid as value
               value: 'invalid as value: foo. allowed: html, meta, md'
-            duplicateBrowser:
-              summary: duplicate browser
-              value: 'browser parameter cannot be specified multiple times'
-            invalidBrowser:
-              summary: invalid browser value
-              value: 'invalid browser value: webkit. allowed: chromium, kitesurf'
+            invalidRenderer:
+              summary: invalid renderer value
+              value: 'invalid renderer value: webkit. allowed: fetch, chromium, kitesurf'
+            duplicateRenderer:
+              summary: renderer repeated within the chain
+              value: 'duplicate renderer in r: chromium'
+            emptyRenderer:
+              summary: empty renderer value
+              value: 'empty renderer value in r'
+            bothRendererAndR:
+              summary: renderer and r used together
+              value: 'specify either renderer or r, not both'
+            removedBrowser:
+              summary: removed browser parameter
+              value: 'browser parameter has been removed. use r=chromium or r=kitesurf (repeatable or comma-separated)'
     BadGateway:
-      description: Bad Gateway - upstream fetch or markdown conversion failure
+      description: Bad Gateway - every renderer in the chain failed
       headers:
         Access-Control-Allow-Origin:
           $ref: '#/components/headers/CorsAllowOrigin'
         Content-Type:
           $ref: '#/components/headers/ContentType'
+        X-Renderer-Chain:
+          $ref: '#/components/headers/XRendererChain'
       content:
         text/plain:
           schema:
             type: string
           examples:
             fetchFail:
-              summary: fetch failed
+              summary: the origin fetch threw
               value: 'failed to fetch target: ...'
             mdFail:
-              summary: both defuddle and Browser Rendering failed
-              value: 'failed to convert to markdown: both defuddle and Browser Rendering failed'
+              summary: no renderer produced markdown
+              value: 'failed to convert to markdown: all renderers failed (fetch, chromium)'
+            chainFail:
+              summary: no renderer answered
+              value: 'all renderers failed (kitesurf)'
 
   schemas:
     PageMeta:

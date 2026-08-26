@@ -107,6 +107,14 @@ check_body GET "/invalid%20host" 400 "invalid target URL"
 # --- as parameter validation ---
 check_body GET "/example.com/?as=invalid" 400 "invalid as value"
 
+# --- renderer / r parameter validation ---
+check_body GET "/example.com/?as=html&r=webkit" 400 "invalid renderer value"
+check_body GET "/example.com/?as=html&r=chromium&r=chromium" 400 "duplicate renderer in r"
+check_body GET "/example.com/?as=html&renderer=fetch&r=chromium" 400 "specify either renderer or r"
+
+# --- browser parameter removed ---
+check_body GET "/example.com/?as=html&browser=kitesurf" 400 "browser parameter has been removed"
+
 # --- Proxy: html (default) ---
 # example.com is stable and returns "Example Domain"
 check_body GET "/example.com/?as=html" 200 "Example Domain"
@@ -140,6 +148,13 @@ check_body GET "/example.com/?as=title" 400 "as=title has been removed"
 check_body GET "/example.com/?as=md" 200 "domain"
 check_header GET "/example.com/?as=md" 200 "Content-Type" "text/markdown"
 check_header GET "/example.com/?as=md" 200 "Access-Control-Allow-Origin" "*"
+
+# --- Renderer reporting ---
+# example.com serves a real <title>, so the fetch renderer answers on its own
+# and the chain never reaches chromium.
+check_header GET "/example.com/?as=meta" 200 "X-Renderer" "fetch"
+check_header GET "/example.com/?as=meta" 200 "X-Renderer-Chain" "fetch=ok"
+check_header GET "/example.com/?as=html" 200 "Access-Control-Expose-Headers" "X-Renderer"
 
 # --- Query forwarding ---
 check_body GET "/example.com/?as=meta" 200 "Example Domain"
