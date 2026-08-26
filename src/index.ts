@@ -40,6 +40,11 @@ if (typeof (globalThis as any).document === "undefined") {
 
 type Bindings = {
   BROWSER: BrowserRun;
+  // Cloudflare account ID + Browser Run API token. Together they unlock the
+  // REST Quick Action path, which is currently the only way to pick a
+  // non-default engine (kitesurf); the binding's quickAction() cannot.
+  CF_ACCOUNT_ID?: string;
+  BROWSER_API_TOKEN?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -228,6 +233,78 @@ async function tryDefuddle(html: string, url: string): Promise<string | null> {
 // outlast a caller's timeout. Caching them keeps a user's retry cheap.
 const BROWSER_META_CACHE_TTL_SECONDS = 600;
 
+// Engines Browser Run can serve a Quick Action with. chromium is the default
+// full engine; kitesurf is the lightweight agent-first browser, reachable only
+// through the REST API's ?browser= parameter as of now.
+type BrowserChoice = "chromium" | "kitesurf";
+
+/**
+ * Run a Quick Action against the Browser Run REST API with kitesurf selected
+ * via `?browser=kitesurf`. Returns null when credentials are missing or the
+ * call fails so callers can fall back to the chromium binding.
+ */
+async function restQuickAction(
+  env: Bindings,
+  action: "content" | "markdown",
+  targetUrl: string,
+  body: Record<string, unknown>,
+  cacheTTL?: number,
+): Promise<Response | null> {
+  if (!env?.CF_ACCOUNT_ID || !env?.BROWSER_API_TOKEN) return null;
+  const endpoint = new URL(
+    `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/browser-rendering/${action}`,
+  );
+  endpoint.searchParams.set("browser", "kitesurf");
+  if (cacheTTL != null) endpoint.searchParams.set("cacheTTL", String(cacheTTL));
+  try {
+    return await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.BROWSER_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error("restQuickAction error:", e);
+    return null;
+  }
+}
+
+/**
+ * Dispatch a Quick Action to the requested engine and hand back its raw
+ * Response. Kitesurf only speaks REST today; when that path is unavailable
+ * (no token configured, network failure) the request falls back to the
+ * chromium binding so an explicit browser=kitesurf never hard-fails the proxy.
+ */
+async function quickActionResult(
+  env: Bindings,
+  action: "content" | "markdown",
+  browser: BrowserChoice,
+  targetUrl: string,
+  body: Record<string, unknown>,
+  cacheTTL?: number,
+): Promise<Response | null> {
+  if (browser === "kitesurf") {
+    const rest = await restQuickAction(env, action, targetUrl, body, cacheTTL);
+    if (rest) return rest;
+    console.warn(
+      "browser=kitesurf requested but the Browser Run REST API is not configured or failed; falling back to chromium",
+    );
+  }
+  if (!env?.BROWSER) return null;
+  const opts = { ...body };
+  if (cacheTTL != null) (opts as any).cacheTTL = cacheTTL;
+  try {
+    // The quickAction overloads are keyed by exact action literal; the union
+    // here only ever carries content/markdown, whose option shapes are shared.
+    return await env.BROWSER.quickAction(action as "content", opts as any);
+  } catch (e) {
+    console.error("quickActionResult error:", e);
+    return null;
+  }
+}
+
 /**
  * Re-fetch the page through Browser Rendering and extract its metadata from the
  * rendered DOM. Used by as=meta when the origin HTML has no title at all, which
@@ -239,18 +316,24 @@ const BROWSER_META_CACHE_TTL_SECONDS = 600;
 async function browserMeta(
   env: Bindings,
   targetUrl: string,
+  browser: BrowserChoice,
 ): Promise<PageMeta | null> {
-  if (!env.BROWSER) return null;
   try {
-    const res = await env.BROWSER.quickAction("content", {
-      url: targetUrl,
-      gotoOptions: { waitUntil: "load" },
-      rejectResourceTypes: ["image", "media", "font", "stylesheet"],
-      bestAttempt: true,
-      cacheTTL: BROWSER_META_CACHE_TTL_SECONDS,
-    } as any);
+    const res = await quickActionResult(
+      env,
+      "content",
+      browser,
+      targetUrl,
+      {
+        url: targetUrl,
+        gotoOptions: { waitUntil: "load" },
+        rejectResourceTypes: ["image", "media", "font", "stylesheet"],
+        bestAttempt: true,
+      },
+      BROWSER_META_CACHE_TTL_SECONDS,
+    );
 
-    if (!res.ok) return null;
+    if (!res || !res.ok) return null;
     const data = (await res.json()) as {
       success: boolean;
       result?: string;
@@ -272,17 +355,23 @@ async function browserMeta(
 async function browserHtml(
   env: Bindings,
   targetUrl: string,
+  browser: BrowserChoice,
 ): Promise<string | null> {
-  if (!env.BROWSER) return null;
   try {
-    const res = await env.BROWSER.quickAction("content", {
-      url: targetUrl,
-      gotoOptions: { waitUntil: "load" },
-      rejectResourceTypes: ["image", "media", "font", "stylesheet"],
-      bestAttempt: true,
-      cacheTTL: BROWSER_META_CACHE_TTL_SECONDS,
-    } as any);
-    if (!res.ok) return null;
+    const res = await quickActionResult(
+      env,
+      "content",
+      browser,
+      targetUrl,
+      {
+        url: targetUrl,
+        gotoOptions: { waitUntil: "load" },
+        rejectResourceTypes: ["image", "media", "font", "stylesheet"],
+        bestAttempt: true,
+      },
+      BROWSER_META_CACHE_TTL_SECONDS,
+    );
+    if (!res || !res.ok) return null;
     const data = (await res.json()) as {
       success: boolean;
       result?: string;
@@ -300,16 +389,16 @@ async function browserHtml(
 async function browserMarkdown(
   env: Bindings,
   targetUrl: string,
+  browser: BrowserChoice,
 ): Promise<string | null> {
-  if (!env.BROWSER) return null;
   try {
-    const res = await env.BROWSER.quickAction("markdown", {
+    const res = await quickActionResult(env, "markdown", browser, targetUrl, {
       url: targetUrl,
       gotoOptions: { waitUntil: "networkidle0" },
-    } as any);
+    });
 
     // quickAction returns Response with JSON { success, result }
-    if (!res.ok) {
+    if (!res || !res.ok) {
       // try to parse error body for debugging but treat as failure
       return null;
     }
@@ -369,7 +458,7 @@ app.get("/", (c) => {
     url.searchParams.toString() === ""
   ) {
     return c.text(
-      "fetch-proxy: use /<host>/<path>?as=html|meta|md",
+      "fetch-proxy: use /<host>/<path>?as=html|meta|md&browser=chromium|kitesurf",
       200,
       withCors({ "Content-Type": "text/plain; charset=utf-8" }),
     );
@@ -470,10 +559,32 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
     );
   }
 
-  // Build forward query (exclude 'as')
+  // browser param handling: pick the engine Browser Run renders fallbacks with.
+  // chromium (the binding default) needs no extra setup; kitesurf goes through
+  // the REST API and requires CF_ACCOUNT_ID + BROWSER_API_TOKEN, falling back
+  // to chromium when those are absent or the call fails.
+  const browserValues = rawUrl.searchParams.getAll("browser");
+  if (browserValues.length > 1) {
+    return c.text(
+      "browser parameter cannot be specified multiple times",
+      400,
+      withCors({ "Content-Type": "text/plain; charset=utf-8" }),
+    );
+  }
+  const browserRaw = browserValues[0] ?? "chromium";
+  if (!["chromium", "kitesurf"].includes(browserRaw)) {
+    return c.text(
+      `invalid browser value: ${browserRaw}. allowed: chromium, kitesurf`,
+      400,
+      withCors({ "Content-Type": "text/plain; charset=utf-8" }),
+    );
+  }
+  const browser = browserRaw as BrowserChoice;
+
+  // Build forward query (exclude 'as' and 'browser')
   const forwardParams = new URLSearchParams();
   for (const [k, v] of rawUrl.searchParams.entries()) {
-    if (k !== "as") forwardParams.append(k, v);
+    if (k !== "as" && k !== "browser") forwardParams.append(k, v);
   }
   let targetUrl = `https://${hostAndPath}`;
   const qs = forwardParams.toString();
@@ -543,9 +654,14 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
   // other statuses.
   if (!originRes.ok) {
     const status = originRes.status;
-    if ((status === 403 || status === 429) && (c.env as Bindings)?.BROWSER) {
+    // Browser fallback needs either the binding or kitesurf REST credentials.
+    const env = c.env as Bindings;
+    const canRender = Boolean(
+      env?.BROWSER || (env?.CF_ACCOUNT_ID && env?.BROWSER_API_TOKEN),
+    );
+    if ((status === 403 || status === 429) && canRender) {
       if (as === "meta") {
-        const rendered = await browserMeta(c.env as Bindings, targetUrl);
+        const rendered = await browserMeta(env, targetUrl, browser);
         if (rendered && (rendered.title || rendered.ogTitle)) {
           return new Response(JSON.stringify(rendered), {
             headers: withCors({
@@ -554,7 +670,7 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
           });
         }
       } else if (as === "md") {
-        const brMarkdown = await browserMarkdown(c.env as Bindings, targetUrl);
+        const brMarkdown = await browserMarkdown(env, targetUrl, browser);
         if (brMarkdown && brMarkdown.trim().length > 0) {
           return new Response(brMarkdown, {
             headers: withCors({
@@ -563,7 +679,7 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
           });
         }
       } else if (as === "html") {
-        const html = await browserHtml(c.env as Bindings, targetUrl);
+        const html = await browserHtml(env, targetUrl, browser);
         if (html) {
           return new Response(html, {
             headers: withCors({ "Content-Type": "text/html; charset=utf-8" }),
@@ -601,7 +717,7 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
     let meta = extractMeta(html);
 
     if (needsRendering(meta)) {
-      const rendered = await browserMeta(c.env, targetUrl);
+      const rendered = await browserMeta(c.env, targetUrl, browser);
       if (rendered) meta = mergeMeta(meta, rendered);
     }
 
@@ -621,7 +737,7 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
 
     if (!isDefuddleSuccess) {
       // fallback to Browser Rendering
-      const brMarkdown = await browserMarkdown(c.env, targetUrl);
+      const brMarkdown = await browserMarkdown(c.env, targetUrl, browser);
       if (brMarkdown && brMarkdown.trim().length > 0) {
         markdown = brMarkdown;
       } else if (!markdown) {

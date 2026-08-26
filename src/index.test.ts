@@ -229,4 +229,165 @@ describe("fetch-proxy", () => {
     );
     vi.unstubAllGlobals();
   });
+
+  it("GET /example.com/?browser=invalid returns 400", async () => {
+    const res = await app.request("/example.com/?as=html&browser=webkit");
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(
+      "invalid browser value: webkit. allowed: chromium, kitesurf",
+    );
+  });
+
+  it("browser parameter cannot be specified multiple times", async () => {
+    const res = await app.request(
+      "/example.com/?as=html&browser=kitesurf&browser=chromium",
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(
+      "browser parameter cannot be specified multiple times",
+    );
+  });
+
+  it("does not forward the browser parameter to the target URL", async () => {
+    const html = "<html><head><title>A</title></head><body></body></html>";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(html, {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await app.request("/example.com/page?as=html&browser=kitesurf");
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/page",
+      expect.anything(),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("browser=kitesurf renders SPA meta through the Browser Run REST API", async () => {
+    const shell = `<!DOCTYPE html><html><head></head><body><div id="root"></div></body></html>`;
+    const fetchMock = vi.fn().mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.includes("api.cloudflare.com")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              result: "<html><head><title>Rendered</title></head></html>",
+              meta: { status: 200, title: "Rendered" },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(shell, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const env = { CF_ACCOUNT_ID: "acct123", BROWSER_API_TOKEN: "tok123" };
+    const res = await app.request(
+      "/example.com/app?as=meta&browser=kitesurf",
+      undefined,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      title: "Rendered",
+      ogTitle: "",
+      ogDescription: "",
+      ogSiteName: "",
+      ogImage: "",
+      description: "",
+    });
+
+    // Kitesurf is only reachable via the REST Quick Action endpoints, so the
+    // call must carry the engine in the query string and the token in the
+    // Authorization header.
+    const restCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("api.cloudflare.com"),
+    );
+    expect(restCall).toBeDefined();
+    const restUrl = new URL(String(restCall?.[0]));
+    expect(restUrl.pathname).toBe(
+      "/client/v4/accounts/acct123/browser-rendering/content",
+    );
+    expect(restUrl.searchParams.get("browser")).toBe("kitesurf");
+    expect(restUrl.searchParams.get("cacheTTL")).toBe("600");
+    const init = restCall?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer tok123",
+    );
+    expect(JSON.parse(String(init.body)).url).toBe("https://example.com/app");
+    vi.unstubAllGlobals();
+  });
+
+  it("browser=kitesurf falls back to the origin answer when REST credentials are missing", async () => {
+    const shell = `<!DOCTYPE html><html><head></head><body><div id="root"></div></body></html>`;
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(shell, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await app.request("/example.com/app?as=meta&browser=kitesurf");
+    expect(res.status).toBe(200);
+    // No credentials configured: only the origin was fetched, no REST attempt.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to chromium"),
+    );
+    warnSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("browser=kitesurf converts markdown through the REST API on a 403 origin", async () => {
+    const markdown =
+      "# Rendered Article\n\nThis markdown came from the kitesurf quick action and is long enough.";
+    const fetchMock = vi.fn().mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.includes("api.cloudflare.com")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: true, result: markdown }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response("blocked", { status: 403, headers: {} }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const env = { CF_ACCOUNT_ID: "acct123", BROWSER_API_TOKEN: "tok123" };
+    const res = await app.request(
+      "/medium.com/post?as=md&browser=kitesurf",
+      undefined,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/markdown");
+    expect(await res.text()).toBe(markdown);
+
+    const restUrl = new URL(
+      String(
+        fetchMock.mock.calls.find(([input]) =>
+          String(input).includes("api.cloudflare.com"),
+        )?.[0],
+      ),
+    );
+    expect(restUrl.pathname.endsWith("/browser-rendering/markdown")).toBe(true);
+    expect(restUrl.searchParams.get("browser")).toBe("kitesurf");
+    vi.unstubAllGlobals();
+  });
 });

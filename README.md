@@ -11,9 +11,10 @@ CORS 付きの汎用 fetch プロキシ (Cloudflare Workers + Hono)。任意の 
 * **`as=html`** — オリジン HTML をそのままプロキシ（`Content-Type` 維持、無い場合は `text/html; charset=utf-8`）
 * **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) を JSON で返却
 * **SPA フォールバック** — `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、`quickAction('content')` (Browser Rendering) でレンダリング後の DOM から再抽出
+* **Kitesurf 選択** — `browser=kitesurf` で Browser Rendering フォールバックのブラウザを Cloudflare の軽量 agent-first ブラウザ [Kitesurf](https://developers.cloudflare.com/browser-run/kitesurf/) に変更（REST API 経由。未設定時は chromium にフォールバック）
 * **YouTube 対応** — `as=meta` で動画 URL (`youtu.be/<id>` / `watch?v=` / `shorts` / `live` / `embed`) は oEmbed から動画タイトルとサムネイルを取得（YouTube は Worker からのアクセスに CAPTCHA 画面を返し、HTML からはタイトルが取れないため）
 * **`as=md`** — `defuddle` (`defuddle/node`) で本文抽出 → Markdown 変換、失敗時は `BROWSER` binding の `quickAction('markdown')` (Browser Rendering) にフォールバック (`src/index.ts:133`)
-* **クエリ転送** — `as` 以外の全クエリを `https://<host>/<path>?<forwarded>` に転送
+* **クエリ転送** — `as` / `browser` 以外の全クエリを `https://<host>/<path>?<forwarded>` に転送
 * **`https://` プレフィックス許容** — `/https://example.com/foo` や `/http://example.com/foo` も自動剥離
 * **オリジンエラー中継** — オリジンが 4xx/5xx ならステータスと body を CORS 付与でそのまま中継
 
@@ -58,7 +59,7 @@ https://fetch.nibo.sh
 
 | Method | Path | 説明 |
 |--------|------|------|
-| `GET` | `/` | `as` なしなら利用方法を返す `200 text/plain: "fetch-proxy: use /<host>/<path>?as=html\|meta\|md"`。それ以外は `400` |
+| `GET` | `/` | `as` なしなら利用方法を返す `200 text/plain: "fetch-proxy: use /<host>/<path>?as=html\|meta\|md&browser=chromium\|kitesurf"`。それ以外は `400` |
 | `GET` | `/{proxyPath}` | プロキシ本体。`proxyPath` は `example.com/foo` 形式（`https://` 付きも可）。`src/index.ts:192` で `pathname.slice(1)` を `hostAndPath` として処理 |
 | `HEAD` | `/{proxyPath}` | `GET` と同ルーティング（ヘッダのみ） |
 | `OPTIONS` | `/*` | CORS preflight → `204` + CORS ヘッダ |
@@ -72,7 +73,8 @@ https://fetch.nibo.sh
 | 名前 | 必須 | 型 | デフォルト | 説明 |
 |------|------|----|-----------|------|
 | `as` | no | `html \| meta \| md` | `html` | レスポンス形式。複数回指定すると `400 as parameter cannot be specified multiple times` |
-| `*` (その他) | no | string | - | `as` 以外は全て転送先 URL に付与。例: `/example.com/search?q=hello&as=md` → `https://example.com/search?q=hello` |
+| `browser` | no | `chromium \| kitesurf` | `chromium` | Browser Rendering フォールバックで使うブラウザエンジン。`kitesurf` は REST API 経由のため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要（無い場合は chromium にフォールバック）。複数回指定すると `400 browser parameter cannot be specified multiple times`。転送先 URL には付与されない |
+| `*` (その他) | no | string | - | `as` / `browser` 以外は全て転送先 URL に付与。例: `/example.com/search?q=hello&as=md` → `https://example.com/search?q=hello` |
 
 ### レスポンス
 
@@ -100,6 +102,8 @@ Access-Control-Max-Age: 86400
 | `400` | `invalid target URL` | URL パース失敗 |
 | `400` | `as parameter cannot be specified multiple times` | `as` 重複 (`getAll` >1) |
 | `400` | `invalid as value: foo. allowed: html, meta, md` | 不正な `as` |
+| `400` | `browser parameter cannot be specified multiple times` | `browser` 重複 (`getAll` >1) |
+| `400` | `invalid browser value: webkit. allowed: chromium, kitesurf` | 不正な `browser` |
 | `400` | `as=title has been removed. use as=meta and read ogTitle, falling back to title` | 廃止された `as=title` |
 | `502` | `failed to fetch target: ...` | `fetch(targetUrl)` 例外 |
 | `502` | `failed to convert to markdown: both defuddle and Browser Rendering failed` | `as=md` で両フォールバック失敗 |
@@ -140,7 +144,10 @@ curl https://fetch.nibo.sh/https://example.com/foo?as=meta
 curl -i -X OPTIONS https://fetch.nibo.sh/example.com/ -H "Origin: https://example.com"
 # => 204 + CORS headers
 
-# 9. ブラウザ JS
+# 9. Kitesurf (軽量 agent-first ブラウザ) でフォールバックをレンダリング
+curl "https://fetch.nibo.sh/medium.com/post?as=md&browser=kitesurf"
+
+# 10. ブラウザ JS
 const md = await fetch("https://fetch.nibo.sh/example.com/blog?as=md").then(r => {
   if (!r.ok) throw new Error(r.status);
   return r.text();
@@ -202,9 +209,25 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
   "compatibility_date": "2026-08-11",
   "compatibility_flags": ["nodejs_compat"],
   "browser": { "binding": "BROWSER" },
+  "vars": { "CF_ACCOUNT_ID": "<account_id>" },
   "workers_dev": true,
   "routes": [{ "pattern": "fetch.nibo.sh/*", "zone_name": "nibo.sh" }]
 }
+```
+
+### シークレット (`browser=kitesurf` 用)
+
+`browser=kitesurf` は Browser Run REST API を直接呼ぶため、次の2つの binding が必要:
+
+| 名前 | 種別 | 説明 |
+|------|------|------|
+| `CF_ACCOUNT_ID` | vars | Cloudflare アカウント ID |
+| `BROWSER_API_TOKEN` | secret (wrangler secret put) | `Browser Rendering - Edit` 権限を持つ API トークン |
+
+未設定でも chromium 経路は通常どおり動作し、`kitesurf` 指定時は警告ログとともに chromium binding へフォールバックする。
+
+```sh
+wrangler secret put BROWSER_API_TOKEN
 ```
 
 ## 実装メモ
@@ -216,6 +239,7 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
 * **YouTube (oEmbed):** YouTube は Worker（データセンター IP）からの watch ページ取得に reCAPTCHA 画面 (429) か「YouTube」とだけ書かれた JS シェルを返すため、オリジン HTML からも Browser Rendering からも動画タイトルが取れない。`as=meta` では origin fetch の前に `youtubeWatchUrl()` が動画 URL を `https://www.youtube.com/watch?v=<id>` に正規化し（`youtu.be` / `shorts` / `live` / `embed` / `/v/` / `m.` / `music.` / `?si=` 除去に対応）、キー不要の `https://www.youtube.com/oembed` から取得する (`src/youtube.ts`)。オリジンの 429 はこの分岐より手前で中継されてしまうので、順序が重要。非公開・削除済み動画やチャンネル/プレイリスト URL では従来どおりオリジン HTML にフォールバックする
 * **md 変換:** `Defuddle(document, url, {markdown:true})` の `wordCount <10 && md.length <50` または `md.length <20` は失敗扱い → Browser Rendering へ (`src/index.ts:113`, `src/index.ts:315`)
 * **Browser Rendering:** `env.BROWSER.quickAction('markdown', {url, gotoOptions:{waitUntil:'networkidle0'}})` (`src/index.ts:136`)、JSON `{success, result}` をパース
+* **Kitesurf (`browser=kitesurf`):** Workers binding の `quickAction()` はブラウザエンジンを選択できない（未対応キーは `400 Unrecognized key` で拒否される）ため、`CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が設定されている場合のみ Browser Run REST API (`POST /client/v4/accounts/<id>/browser-rendering/{content|markdown}?browser=kitesurf`) を直接呼ぶ (`restQuickAction()`)。REST 未設定・失敗時は警告ログとともに chromium binding へフォールバックし、`kitesurf` 指定がプロキシを停止させない。Kitesurf は Chromium 比 CPU/メモリ 3〜7× 削減の代わりに壁時間 1.7〜1.8×、ピクセル完全な描画や動画/WebGL は非対応 ([ドキュメント](https://developers.cloudflare.com/browser-run/kitesurf/))
 
 ## ライセンス
 

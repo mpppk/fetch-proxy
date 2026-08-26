@@ -3,7 +3,7 @@
   "info": {
     "title": "fetch-proxy",
     "version": "1.0.0",
-    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n\nYouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、\n`as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。\nYouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
+    "description": "CORS-enabled fetch proxy running on Cloudflare Workers.\n\nプロキシ形式: `GET https://fetch.nibo.sh/<host>/<path>?as=html|meta|md`\n\n* `as=html` (default) — オリジンの HTML をそのままプロキシ（CORS 付与）\n* `as=meta` — `<title>` と OGP メタ情報を JSON で返却\n\n`as=meta` は、オリジン HTML に `og:title` も `<title>` も無い場合\n（クライアントサイドレンダリングの SPA など）、Browser Rendering\n(`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。\n\nYouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、\n`as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。\nYouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。\n* `as=md` — `defuddle` で Markdown 変換、失敗時は Browser Rendering (`BROWSER` binding の `quickAction('markdown')`) にフォールバック\n\n追加のクエリパラメータは `as` と `browser` 以外すべて `https://<host>/<path>?<forwarded>` として転送されます。\n`https://` / `http://` プレフィックス付きのパス (`/https://example.com/foo`) も許容し、自動で剥離します。\n",
     "contact": {
       "name": "mpppk",
       "url": "https://github.com/mpppk/fetch-proxy"
@@ -64,7 +64,7 @@
               "text/plain": {
                 "schema": {
                   "type": "string",
-                  "example": "fetch-proxy: use /<host>/<path>?as=html|meta|md"
+                  "example": "fetch-proxy: use /<host>/<path>?as=html|meta|md&browser=chromium|kitesurf"
                 }
               }
             }
@@ -113,10 +113,25 @@
             "example": "md"
           },
           {
+            "name": "browser",
+            "in": "query",
+            "required": false,
+            "description": "Browser Rendering フォールバック（SPA の `as=meta` 再取得、403/429 時の再レンダリング、`as=md` フォールバック）で使うブラウザエンジン。\n* `chromium` (default) — `BROWSER` binding の `quickAction()`\n* `kitesurf` — Cloudflare の軽量 agent-first ブラウザ。Browser Run REST API (`?browser=kitesurf`) 経由で呼び出すため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` の設定が必要。未設定やREST呼び出し失敗時は chromium binding にフォールバックする。\n複数回指定すると 400。転送先 URL には付与されない。\n",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "chromium",
+                "kitesurf"
+              ],
+              "default": "chromium"
+            },
+            "example": "kitesurf"
+          },
+          {
             "name": "forwardedQuery",
             "in": "query",
             "required": false,
-            "description": "`as` 以外の任意のクエリパラメータはそのまま転送先 URL に付与される。\n例: `/example.com/search?q=hello&lang=ja&as=md` → `https://example.com/search?q=hello&lang=ja`\n",
+            "description": "`as` と `browser` 以外の任意のクエリパラメータはそのまま転送先 URL に付与される。\n例: `/example.com/search?q=hello&lang=ja&as=md` → `https://example.com/search?q=hello&lang=ja`\n",
             "schema": {
               "type": "string"
             },
@@ -250,6 +265,19 @@
               ],
               "default": "html"
             }
+          },
+          {
+            "name": "browser",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "chromium",
+                "kitesurf"
+              ],
+              "default": "chromium"
+            }
           }
         ],
         "responses": {
@@ -380,6 +408,14 @@
               "invalidAs": {
                 "summary": "invalid as value",
                 "value": "invalid as value: foo. allowed: html, meta, md"
+              },
+              "duplicateBrowser": {
+                "summary": "duplicate browser",
+                "value": "browser parameter cannot be specified multiple times"
+              },
+              "invalidBrowser": {
+                "summary": "invalid browser value",
+                "value": "invalid browser value: webkit. allowed: chromium, kitesurf"
               }
             }
           }
