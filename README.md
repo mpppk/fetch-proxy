@@ -9,7 +9,7 @@ CORS 付きの汎用 fetch プロキシ (Cloudflare Workers + Hono)。任意の 
 
 * **CORS 対応** — `Access-Control-Allow-Origin: *`, `GET/HEAD/OPTIONS` を許可
 * **`as=html`** — オリジン HTML をそのままプロキシ（`Content-Type` 維持、無い場合は `text/html; charset=utf-8`）
-* **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) を JSON で返却
+* **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) に加え、リダイレクト追従後の最終URL (`finalUrl`) を JSON で返却
 * **SPA フォールバック** — `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、`quickAction('content')` (Browser Rendering) でレンダリング後の DOM から再抽出
 * **Kitesurf 選択** — `browser=kitesurf` で Browser Rendering フォールバックのブラウザを Cloudflare の軽量 agent-first ブラウザ [Kitesurf](https://developers.cloudflare.com/browser-run/kitesurf/) に変更（REST API 経由。未設定時は chromium にフォールバック）
 * **YouTube 対応** — `as=meta` で動画 URL (`youtu.be/<id>` / `watch?v=` / `shorts` / `live` / `embed`) は oEmbed から動画タイトルとサムネイルを取得（YouTube は Worker からのアクセスに CAPTCHA 画面を返し、HTML からはタイトルが取れないため）
@@ -211,7 +211,12 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
   "browser": { "binding": "BROWSER" },
   "vars": { "CF_ACCOUNT_ID": "<account_id>" },
   "workers_dev": true,
-  "routes": [{ "pattern": "fetch.nibo.sh/*", "zone_name": "nibo.sh" }]
+  "routes": [{ "pattern": "fetch.nibo.sh/*", "zone_name": "nibo.sh" }],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 1 }
+  }
 }
 ```
 
@@ -229,6 +234,20 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
 ```sh
 wrangler secret put BROWSER_API_TOKEN
 ```
+
+### 監視 (Workers Logs / Workers Traces)
+
+`observability` で Workers Logs と Workers Traces を有効にしている。ダッシュボードの **Workers & Pages → fetch-proxy → Observability** から、invocation ログ・`console.*` の出力・例外と、リクエストごとのスパン (origin への `fetch`、Browser Rendering 呼び出しなど) を確認できる。
+
+* `head_sampling_rate` は両方とも `1` (100%)。個人利用の低トラフィックなので全件取れる。転送量が増えたら下げる
+* ログの保持は 7 日。それ以上残したい場合は OpenTelemetry export か Logpush を足す
+* Traces は `observability.enabled` では有効にならず、`observability.traces.enabled` を明示する必要がある (2026-08 時点)
+* `observability` は**スクリプト単位の設定**で、`wrangler deploy`（= `main` の本番ビルド）でしか反映されない。ブランチのプレビュー (`wrangler versions upload`) では適用されないので、PR のプレビュー URL を叩いてもログは出ない
+* 反映後の確認は API でもできる:
+  ```sh
+  curl -s "https://api.cloudflare.com/client/v4/accounts/<account_id>/workers/scripts/fetch-proxy/settings" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq .result.observability
+  ```
 
 ## 実装メモ
 

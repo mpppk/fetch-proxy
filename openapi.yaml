@@ -14,6 +14,10 @@ info:
     （クライアントサイドレンダリングの SPA など）、Browser Rendering
     (`BROWSER` binding の `quickAction('content')`) でレンダリング後の DOM から再抽出します。
 
+    オリジンがリダイレクトする場合（例: Google の共有短縮URL `share.google/*`）、
+    プロキシはリダイレクトを追従して最終ページを取得し、その最終URLを
+    レスポンスの `finalUrl` として返します。
+
     YouTube の動画 URL (`youtu.be/<id>`, `watch?v=`, `shorts`, `live`, `embed`) は例外で、
     `as=meta` はオリジンではなく oEmbed (`https://www.youtube.com/oembed`) からタイトルを取得します。
     YouTube は Worker からの watch ページ取得に CAPTCHA 画面 (429) を返すためです。
@@ -163,6 +167,7 @@ paths:
                     ogSiteName: 'X (formerly Twitter)'
                     ogImage: 'https://pbs.twimg.com/profile_images/1661201415899951105/azNjKOSH_400x400.jpg'
                     description: 'just setting up my twttr'
+                    finalUrl: 'https://x.com/jack/status/20'
             text/markdown:
               schema:
                 type: string
@@ -339,16 +344,22 @@ components:
     PageMeta:
       type: object
       description: |
-        `as=meta` のレスポンス。抽出できなかったキーは空文字列 `""` になる。
-        オリジン HTML に `og:title` も `<title>` も無い場合は Browser Rendering で
-        レンダリング後の DOM から再抽出し、オリジン HTML 側で取得済みの値を優先して空欄のみ埋める。
-        各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。
-        YouTube の動画 URL では oEmbed の結果を同じ形に整えて返す
-        (`title` は `"<動画タイトル> - YouTube"`, `ogTitle` は動画タイトル,
-        `ogSiteName` は `"YouTube"`, `ogImage` はサムネイル URL。
-        oEmbed は description を返さないため `ogDescription` / `description` は空)。
-      required: [title, ogTitle, ogDescription, ogSiteName, ogImage, description]
+          `as=meta` のレスポンス。抽出できなかったキーは空文字列 `""` になる。
+          オリジン HTML に `og:title` も `<title>` も無い場合は Browser Rendering で
+          レンダリング後の DOM から再抽出し、オリジン HTML 側で取得済みの値を優先して空欄のみ埋める。
+          各 OGP キーは `meta[property=...]` → `meta[name=...]` の順で探索する。
+          YouTube の動画 URL では oEmbed の結果を同じ形に整えて返す
+          (`title` は `"<動画タイトル> - YouTube"`, `ogTitle` は動画タイトル,
+          `ogSiteName` は `"YouTube"`, `ogImage` はサムネイル URL。
+          oEmbed は description を返さないため `ogDescription` / `description` は空)。
+      required: [title, ogTitle, ogDescription, ogSiteName, ogImage, description, finalUrl]
       properties:
+        finalUrl:
+          type: string
+          description: |
+            リダイレクトを追従した後に実際に到達した最終URL。
+            リダイレクトが観測できない場合（oEmbed 経由やモック等）は要求されたURLを返す。
+          example: 'https://x.com/jack/status/20'
         title:
           type: string
           description: '`<title>` のテキスト'

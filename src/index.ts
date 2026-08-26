@@ -69,6 +69,12 @@ type PageMeta = {
   ogSiteName: string;
   ogImage: string;
   description: string;
+  /**
+   * URL the origin request actually landed on after following redirects
+   * (e.g. a share.google short link resolves to its destination here).
+   * Falls back to the requested URL when no redirect chain was observable.
+   */
+  finalUrl: string;
 };
 
 const emptyMeta: PageMeta = {
@@ -78,6 +84,7 @@ const emptyMeta: PageMeta = {
   ogSiteName: "",
   ogImage: "",
   description: "",
+  finalUrl: "",
 };
 
 // Read a meta tag's content, tolerating property/name and escaped-colon variants
@@ -119,6 +126,7 @@ function extractMeta(html: string): PageMeta {
       ogSiteName: metaContent(document, "og:site_name"),
       ogImage: metaContent(document, "og:image"),
       description: metaContent(document, "description"),
+      finalUrl: "",
     };
   } catch {
     // fallback regex if parse fails
@@ -168,6 +176,7 @@ function mergeMeta(primary: PageMeta, fallback: PageMeta): PageMeta {
     ogSiteName: primary.ogSiteName || fallback.ogSiteName,
     ogImage: primary.ogImage || fallback.ogImage,
     description: primary.description || fallback.description,
+    finalUrl: primary.finalUrl || fallback.finalUrl,
   };
 }
 
@@ -616,11 +625,15 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
     if (watchUrl) {
       const video = await fetchYouTubeOEmbed(watchUrl);
       if (video) {
-        return new Response(JSON.stringify(youtubeMeta(video)), {
-          headers: withCors({
-            "Content-Type": "application/json; charset=utf-8",
-          }),
-        });
+        // The oEmbed path never follows a redirect, so the requested URL is final
+        return new Response(
+          JSON.stringify({ ...youtubeMeta(video), finalUrl: targetUrl }),
+          {
+            headers: withCors({
+              "Content-Type": "application/json; charset=utf-8",
+            }),
+          },
+        );
       }
     }
   }
@@ -663,11 +676,17 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
       if (as === "meta") {
         const rendered = await browserMeta(env, targetUrl, browser);
         if (rendered && (rendered.title || rendered.ogTitle)) {
-          return new Response(JSON.stringify(rendered), {
-            headers: withCors({
-              "Content-Type": "application/json; charset=utf-8",
+          return new Response(
+            JSON.stringify({
+              ...rendered,
+              finalUrl: originRes.url || targetUrl,
             }),
-          });
+            {
+              headers: withCors({
+                "Content-Type": "application/json; charset=utf-8",
+              }),
+            },
+          );
         }
       } else if (as === "md") {
         const brMarkdown = await browserMarkdown(env, targetUrl, browser);
@@ -721,9 +740,16 @@ app.on(["GET", "HEAD"], "/*", async (c) => {
       if (rendered) meta = mergeMeta(meta, rendered);
     }
 
-    return new Response(JSON.stringify(meta), {
-      headers: withCors({ "Content-Type": "application/json; charset=utf-8" }),
-    });
+    // The origin fetch follows redirects, so response.url is where the chain
+    // actually landed; mocked/empty URLs fall back to the requested one.
+    return new Response(
+      JSON.stringify({ ...meta, finalUrl: originRes.url || targetUrl }),
+      {
+        headers: withCors({
+          "Content-Type": "application/json; charset=utf-8",
+        }),
+      },
+    );
   }
 
   // as=md : markdown conversion
