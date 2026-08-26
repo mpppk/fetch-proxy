@@ -14,8 +14,9 @@ info:
     （クライアントサイドレンダリングの SPA など）、defuddle の JSON-LD / schema.org 抽出、
     続いて Browser Rendering (`quickAction('content')`) でレンダリング後の DOM から再抽出します。
 
-    取得経路は `renderer` (短縮形 `r`) で優先順に指定できます。既定は `fetch,chromium` で、
-    先頭から順に試して失敗したら次へフォールバックします。実際に応答したレンダラは
+    取得経路は `renderer` (短縮形 `r`) で優先順に指定できます。先頭から順に試して失敗したら
+    次へフォールバックします。既定は `auto` = `fetch,kitesurf,chromium` で、オリジンに聞き、
+    答えられなければ安いブラウザから順にエスカレーションします。実際に応答したレンダラは
     `X-Renderer`、試行順と結果は `X-Renderer-Chain` レスポンスヘッダで返ります。
 
     オリジンがリダイレクトする場合（例: Google の共有短縮URL `share.google/*`）、
@@ -75,7 +76,7 @@ paths:
             text/plain:
               schema:
                 type: string
-                example: 'fetch-proxy: use /<host>/<path>?as=html|meta|md&r=fetch,chromium,kitesurf'
+                example: 'fetch-proxy: use /<host>/<path>?as=html|meta|md&r=auto|fetch|kitesurf|chromium'
         '400':
           $ref: '#/components/responses/BadRequest'
 
@@ -115,15 +116,23 @@ paths:
           required: false
           description: |
             取得経路を優先順に並べたチェーン。先頭から順に試し、失敗したら次へフォールバックする。
-            省略時は `fetch,chromium`。
+            省略時は `auto`。
 
+            * `auto` — レンダラではなく推奨チェーン `fetch,kitesurf,chromium` の別名。オリジンに聞き、
+              答えられなければ安いブラウザから順にエスカレーションする。単独でのみ指定でき、
+              他のレンダラと併記すると 400。
             * `fetch` — オリジンへの素の HTTP GET。`as=html` はそのまま返し、`as=meta` は
               `extractMeta()`（空なら defuddle の JSON-LD / schema.org 抽出）、`as=md` は defuddle で変換する。
               オリジンが 403/429 を返した場合のみチェーンを継続し、それ以外の非 2xx はそのまま中継する。
+            * `kitesurf` — Cloudflare の軽量 agent-first ブラウザ。chromium 比で CPU/メモリ 3〜7× 削減、
+              壁時間は約 1.7×。Browser Run REST API (`?browser=kitesurf`) 経由でのみ選択できるため
+              `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要。未設定なら失敗として次のレンダラに進む
+              （暗黙に chromium へは落ちない）。ボット保護のあるサイトでは chromium が通る一方
+              kitesurf が弾かれることがあり、その場合も失敗として次に進む。
+
+            ブラウザレンダラは、ブラウザ自身が 4xx/5xx を返された場合も失敗として扱う。
+            ボット遮断ページを記事として返さないための判定。
             * `chromium` — Browser Run の標準エンジン。`BROWSER` binding 経由。
-            * `kitesurf` — Cloudflare の軽量 agent-first ブラウザ。Browser Run REST API
-              (`?browser=kitesurf`) 経由でのみ選択できるため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要。
-              未設定なら失敗として次のレンダラに進む（暗黙に chromium へは落ちない）。
 
             繰り返し指定 (`?r=kitesurf&r=chromium`)・カンマ区切り (`?r=kitesurf,chromium`)・両者の混在のいずれも可で、
             指定順がそのままチェーン順になる。同じレンダラの重複指定は 400。
@@ -134,8 +143,8 @@ paths:
             type: array
             items:
               type: string
-              enum: [fetch, chromium, kitesurf]
-            default: [fetch, chromium]
+              enum: [auto, fetch, kitesurf, chromium]
+            default: [auto]
           example: [kitesurf, chromium]
         - name: r
           in: query
@@ -147,8 +156,8 @@ paths:
             type: array
             items:
               type: string
-              enum: [fetch, chromium, kitesurf]
-            default: [fetch, chromium]
+              enum: [auto, fetch, kitesurf, chromium]
+            default: [auto]
           example: [kitesurf, chromium]
         - name: forwardedQuery
           in: query
@@ -268,8 +277,8 @@ paths:
             type: array
             items:
               type: string
-              enum: [fetch, chromium, kitesurf]
-            default: [fetch, chromium]
+              enum: [auto, fetch, kitesurf, chromium]
+            default: [auto]
         - name: r
           in: query
           required: false
@@ -279,8 +288,8 @@ paths:
             type: array
             items:
               type: string
-              enum: [fetch, chromium, kitesurf]
-            default: [fetch, chromium]
+              enum: [auto, fetch, kitesurf, chromium]
+            default: [auto]
       responses:
         '200':
           description: HEAD success (headers only, no body per HTTP spec)
@@ -394,7 +403,10 @@ components:
               value: 'invalid as value: foo. allowed: html, meta, md'
             invalidRenderer:
               summary: invalid renderer value
-              value: 'invalid renderer value: webkit. allowed: fetch, chromium, kitesurf'
+              value: 'invalid renderer value: webkit. allowed: auto, fetch, kitesurf, chromium'
+            autoCombined:
+              summary: auto combined with another renderer
+              value: 'renderer auto cannot be combined with other renderers'
             duplicateRenderer:
               summary: renderer repeated within the chain
               value: 'duplicate renderer in r: chromium'
@@ -426,7 +438,7 @@ components:
               value: 'failed to fetch target: ...'
             mdFail:
               summary: no renderer produced markdown
-              value: 'failed to convert to markdown: all renderers failed (fetch, chromium)'
+              value: 'failed to convert to markdown: all renderers failed (fetch, kitesurf, chromium)'
             chainFail:
               summary: no renderer answered
               value: 'all renderers failed (kitesurf)'
