@@ -497,6 +497,28 @@ async function quickActionResult(
 }
 
 /**
+ * What Browser Run reports about the page it loaded, alongside the render
+ * itself. `status` is the status the page answered the browser with, which is
+ * not the same as the status of the Quick Action call.
+ */
+type RenderMeta = { status?: number; title?: string };
+
+/**
+ * True when the browser was served an error or an interstitial rather than the
+ * page. `bestAttempt` asks Browser Run to hand back whatever it managed to
+ * load, so a bot-block page arrives as a perfectly well-formed render: without
+ * this check its title and body are returned as if they were the article.
+ *
+ * This matters most for kitesurf, which bot protection turns away where it
+ * lets chromium through — Medium answers kitesurf with Cloudflare's own
+ * "Attention Required!" page. Failing the renderer here is what lets the chain
+ * move on to one that can actually read the page.
+ */
+function renderRejected(meta: RenderMeta | undefined): boolean {
+  return typeof meta?.status === "number" && meta.status >= 400;
+}
+
+/**
  * Re-fetch the page through Browser Rendering and extract its metadata from the
  * rendered DOM. Used by as=meta when the origin HTML has no title at all, which
  * is the case for client-side rendered SPAs.
@@ -527,9 +549,15 @@ async function browserMeta(
     const data = (await res.json()) as {
       success: boolean;
       result?: string;
-      meta?: { status?: number; title?: string };
+      meta?: RenderMeta;
     };
     if (!data.success || typeof data.result !== "string") return null;
+    if (renderRejected(data.meta)) {
+      console.warn(
+        `browserMeta: ${engine} was served ${data.meta?.status} for ${targetUrl}`,
+      );
+      return null;
+    }
 
     const meta = extractMeta(data.result);
     // Browser Rendering reports document.title separately, which survives even
@@ -564,8 +592,15 @@ async function browserHtml(
     const data = (await res.json()) as {
       success: boolean;
       result?: string;
+      meta?: RenderMeta;
     };
     if (!data.success || typeof data.result !== "string") return null;
+    if (renderRejected(data.meta)) {
+      console.warn(
+        `browserHtml: ${engine} was served ${data.meta?.status} for ${targetUrl}`,
+      );
+      return null;
+    }
     const html = data.result.trim();
     if (!html) return null;
     return html;
@@ -596,8 +631,15 @@ async function browserMarkdown(
       const data = (await res.json()) as {
         success: boolean;
         result?: string;
+        meta?: RenderMeta;
         errors?: unknown;
       };
+      if (renderRejected(data.meta)) {
+        console.warn(
+          `browserMarkdown: ${engine} was served ${data.meta?.status} for ${targetUrl}`,
+        );
+        return null;
+      }
       if (
         data.success &&
         typeof data.result === "string" &&

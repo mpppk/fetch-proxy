@@ -127,7 +127,11 @@ paths:
             * `kitesurf` — Cloudflare の軽量 agent-first ブラウザ。chromium 比で CPU/メモリ 3〜7× 削減、
               壁時間は約 1.7×。Browser Run REST API (`?browser=kitesurf`) 経由でのみ選択できるため
               `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要。未設定なら失敗として次のレンダラに進む
-              （暗黙に chromium へは落ちない）。
+              （暗黙に chromium へは落ちない）。ボット保護のあるサイトでは chromium が通る一方
+              kitesurf が弾かれることがあり、その場合も失敗として次に進む。
+
+            ブラウザレンダラは、ブラウザ自身が 4xx/5xx を返された場合も失敗として扱う。
+            ボット遮断ページを記事として返さないための判定。
             * `chromium` — Browser Run の標準エンジン。`BROWSER` binding 経由。
 
             繰り返し指定 (`?r=kitesurf&r=chromium`)・カンマ区切り (`?r=kitesurf,chromium`)・両者の混在のいずれも可で、

@@ -95,9 +95,12 @@ https://fetch.nibo.sh
 
 `auto` は単独でのみ指定できる。`r=auto,chromium` のような併記は 400 になる — `auto` は既に chromium で終わるチェーンなので後ろに書いたものは到達せず、前に書くと展開先のレンダラと衝突するため。
 
+ボット保護のあるサイトでは kitesurf が弾かれて chromium が通ることがある（IP ではなくブラウザのフィンガープリントが見られていると思われる）。その場合 `auto` は kitesurf を失敗として chromium に進むので、チェーンは `fetch=failed,kitesurf=failed,chromium=ok` になる。
+
 kitesurf の認証情報が無い環境でも `auto` は kitesurf を飛ばさない。`restQuickAction()` が即座に失敗を返すのでネットワークコストはゼロで、`X-Renderer-Chain: fetch=empty,kitesurf=failed,chromium=ok` として設定漏れがそのまま見える。
 
 * `kitesurf` は Browser Run REST API 経由でしか選べないため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要。未設定なら**失敗**として次のレンダラに進む（暗黙に chromium へ落ちることはない。従来の挙動が欲しい場合は `r=kitesurf,chromium` と明示する）
+* ブラウザレンダラは、**ブラウザ自身が 4xx/5xx を返されたら失敗扱い**にしてチェーンを継続する。`bestAttempt` によりボット遮断ページも整形されたレンダリング結果として返ってくるため、これが無いとブロックページのタイトルと本文が記事として返ってしまう（Medium は kitesurf に Cloudflare の `Attention Required!` ページを返す）
 * `fetch` がオリジンから 403 / 429 を受け取った場合はボット遮断とみなしてチェーンを継続する。それ以外の非 2xx（404 等）はオリジンの答えそのものなので、チェーンを打ち切ってステータスと body をそのまま中継する
 * チェーンに `fetch` が無い場合（例: `r=chromium`）、オリジンへの HTTP GET は一切行わない
 
@@ -316,6 +319,7 @@ wrangler secret put BROWSER_API_TOKEN
 * **Browser Rendering:** `env.BROWSER.quickAction('markdown', {url, gotoOptions:{waitUntil:'networkidle0'}})` (`src/index.ts:136`)、JSON `{success, result}` をパース
 * **Kitesurf (`r=kitesurf`):** Workers binding の `quickAction()` はブラウザエンジンを選択できない（未対応キーは `400 Unrecognized key` で拒否される）ため、`CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が設定されている場合のみ Browser Run REST API (`POST /client/v4/accounts/<id>/browser-rendering/{content|markdown}?browser=kitesurf`) を直接呼ぶ (`restQuickAction()`)。Kitesurf は Chromium 比 CPU/メモリ 3〜7× 削減の代わりに壁時間 1.7〜1.8×、ピクセル完全な描画や動画/WebGL は非対応 ([ドキュメント](https://developers.cloudflare.com/browser-run/kitesurf/))
 * **レンダラチェーン:** `parseChain()` が `renderer` / `r` を読み、`fetch` / `kitesurf` / `chromium` の順序付きリストに展開する。`auto`（および無指定）は `AUTO_CHAIN` に展開され、`X-Renderer-Chain` には展開後の実チェーンが出る — ヘッダの用途は「実際に何が走ったか」を伝えることなので、`auto` という名前はそこには現れない。順序は `new URL(c.req.url).searchParams.getAll()` で取得しており、WHATWG URL 仕様が `getAll()` にクエリ文字列の出現順を保証しているため、フレームワーク側の実装に依存しない。ハンドラはこのリストを先頭から順に試し、最初に応答したレンダラの結果を返す
+* **ボット遮断の検知 (`renderRejected()`):** Browser Run はレンダリング結果と一緒に「ページ自身が返した HTTP ステータス」を `meta.status` として返す（Quick Action 呼び出し自体のステータスとは別物）。これが 4xx/5xx ならレンダラを失敗扱いにする。`bestAttempt: true` を指定しているため、ボット遮断ページも「成功したレンダリング」として返ってくるからで、この検知が無いと `Attention Required! | Cloudflare` がそのまま記事のタイトル・本文になる。`meta` を返さないレスポンスもあるため、**未定義は拒否として扱わない**（そうしないと全レンダリングが失敗する）
 * **暗黙フォールバックの廃止:** 旧 `browser=kitesurf` は REST 未設定・失敗時に `quickActionResult()` の中で黙って chromium binding に落ちていた。チェーンが明示的になった今、隠れたフォールバックは `X-Renderer` を嘘にするため削除した。`quickActionResult()` は kitesurf → REST のみ / chromium → binding のみで、失敗したら `null` を返して判断を呼び出し側のチェーンに委ねる
 * **オリジン取得のメモ化:** `fetch` レンダラが名指しされたときだけオリジンに HTTP GET し、結果は `originState` に保持する。チェーンが尽きたあとに 403/429 の body を中継するのに再利用するため、リクエストあたり必ず 1 回に収まる
 * **`withDomGlobals()`:** `defuddle/node` と turndown は引数ではなくグローバルの `document` / `window` を直接見るため、linkedom の DOM を一時的にグローバルへ差し込み、`finally` で必ず元に戻す。`tryDefuddle()`（Markdown）と `defuddleMeta()`（メタ情報）が共有する

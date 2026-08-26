@@ -800,4 +800,137 @@ describe("fetch-proxy", () => {
     expect(res.headers.get("X-Renderer-Chain")).toBe("fetch=ok");
     vi.unstubAllGlobals();
   });
+
+  // --- bot-block detection ---
+
+  it("treats a render the page answered with 4xx as a failure, not a result", async () => {
+    // What Medium actually serves kitesurf: a well-formed render of
+    // Cloudflare's own block page, which bestAttempt hands back happily.
+    const blockPage =
+      "<html><head><title>Attention Required! | Cloudflare</title></head><body><h1>Sorry, you have been blocked</h1><p>You are unable to access medium.com because this website is using a security service to protect itself from online attacks.</p></body></html>";
+    const makeMock = (status: number) =>
+      vi.fn().mockImplementation((input: unknown) => {
+        if (String(input).includes("api.cloudflare.com")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                success: true,
+                result: blockPage,
+                meta: { status, title: "Attention Required! | Cloudflare" },
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response("blocked", {
+            status: 403,
+            headers: { "Content-Type": "text/plain" },
+          }),
+        );
+      });
+    const env = { CF_ACCOUNT_ID: "acct123", BROWSER_API_TOKEN: "tok123" };
+
+    // The browser was blocked too: the chain must not stop here.
+    vi.stubGlobal("fetch", makeMock(403));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const blocked = await app.request(
+      "/medium.com/post?as=meta&r=fetch,kitesurf",
+      undefined,
+      env,
+    );
+    expect(blocked.headers.get("X-Renderer-Chain")).toBe(
+      "fetch=failed,kitesurf=failed",
+    );
+    // No renderer got past the origin, so its own 403 is what the caller sees
+    // rather than the block page dressed up as the article.
+    expect(blocked.status).toBe(403);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("kitesurf was served 403"),
+    );
+    warnSpy.mockRestore();
+    vi.unstubAllGlobals();
+
+    // Same render, but the page answered 200: an ordinary success.
+    vi.stubGlobal("fetch", makeMock(200));
+    const ok = await app.request(
+      "/medium.com/post?as=meta&r=fetch,kitesurf",
+      undefined,
+      env,
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("X-Renderer-Chain")).toBe("fetch=failed,kitesurf=ok");
+    vi.unstubAllGlobals();
+  });
+
+  it("carries the 4xx render check into as=md and as=html", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: unknown) => {
+      if (String(input).includes("api.cloudflare.com")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              result:
+                "# Sorry, you have been blocked\n\nYou are unable to access medium.com right now.",
+              meta: { status: 403 },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("blocked", { status: 403 }));
+    });
+    const env = { CF_ACCOUNT_ID: "acct123", BROWSER_API_TOKEN: "tok123" };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    for (const as of ["md", "html"]) {
+      vi.stubGlobal("fetch", fetchMock);
+      const res = await app.request(
+        `/medium.com/post?as=${as}&r=fetch,kitesurf`,
+        undefined,
+        env,
+      );
+      expect(res.headers.get("X-Renderer-Chain")).toBe(
+        "fetch=failed,kitesurf=failed",
+      );
+      expect(res.status).toBe(403);
+      vi.unstubAllGlobals();
+    }
+    warnSpy.mockRestore();
+  });
+
+  it("still renders when Browser Run reports no page status at all", async () => {
+    // Not every Quick Action response carries meta; absence must not be read
+    // as a rejection, or every render would fail.
+    const shell = `<!DOCTYPE html><html><head></head><body><div id="root"></div></body></html>`;
+    const fetchMock = vi.fn().mockImplementation((input: unknown) => {
+      if (String(input).includes("api.cloudflare.com")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              result: "<html><head><title>Rendered</title></head></html>",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(shell, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = { CF_ACCOUNT_ID: "acct123", BROWSER_API_TOKEN: "tok123" };
+    const res = await app.request(
+      "/example.com/app?as=meta&r=fetch,kitesurf",
+      undefined,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Renderer-Chain")).toBe("fetch=empty,kitesurf=ok");
+    vi.unstubAllGlobals();
+  });
 });
