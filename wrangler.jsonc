@@ -5,7 +5,14 @@
   "compatibility_date": "2026-08-11",
   "compatibility_flags": ["nodejs_compat"],
   "browser": {
-    "binding": "BROWSER"
+    "binding": "BROWSER",
+    // quickAction() requires remote mode for local development
+    "remote": true
+  },
+  // Used with the BROWSER_API_TOKEN secret to call Browser Run Quick Actions
+  // over REST when browser=kitesurf is requested.
+  "vars": {
+    "CF_ACCOUNT_ID": "e3e66e02919ba2916b412cba4009f5c0"
   },
   "workers_dev": true,
   "routes": [
