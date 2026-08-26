@@ -10,11 +10,12 @@ CORS 付きの汎用 fetch プロキシ (Cloudflare Workers + Hono)。任意の 
 * **CORS 対応** — `Access-Control-Allow-Origin: *`, `GET/HEAD/OPTIONS` を許可
 * **`as=html`** — オリジン HTML をそのままプロキシ（`Content-Type` 維持、無い場合は `text/html; charset=utf-8`）
 * **`as=meta`** — `<title>` と OGP メタ情報 (`og:title` / `og:description` / `og:site_name` / `og:image` / `description`) に加え、リダイレクト追従後の最終URL (`finalUrl`) を JSON で返却
-* **SPA フォールバック** — `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、`quickAction('content')` (Browser Rendering) でレンダリング後の DOM から再抽出
-* **Kitesurf 選択** — `browser=kitesurf` で Browser Rendering フォールバックのブラウザを Cloudflare の軽量 agent-first ブラウザ [Kitesurf](https://developers.cloudflare.com/browser-run/kitesurf/) に変更（REST API 経由。未設定時は chromium にフォールバック）
+* **SPA フォールバック** — `as=meta` でオリジン HTML に `og:title` も `<title>` も無い場合、defuddle の JSON-LD / schema.org 抽出 → `quickAction('content')` (Browser Rendering) の順に再抽出
+* **レンダラチェーン** — `renderer` (短縮形 `r`) で取得経路を優先順に指定。`fetch` / `chromium` / [`kitesurf`](https://developers.cloudflare.com/browser-run/kitesurf/) から選び、失敗したら次へフォールバックする（例: `r=kitesurf,chromium`）。既定は `fetch,chromium`
+* **経路の可視化** — 実際に応答したレンダラを `X-Renderer`、試行順と結果を `X-Renderer-Chain` レスポンスヘッダで返却（`Access-Control-Expose-Headers` 済み）
 * **YouTube 対応** — `as=meta` で動画 URL (`youtu.be/<id>` / `watch?v=` / `shorts` / `live` / `embed`) は oEmbed から動画タイトルとサムネイルを取得（YouTube は Worker からのアクセスに CAPTCHA 画面を返し、HTML からはタイトルが取れないため）
-* **`as=md`** — `defuddle` (`defuddle/node`) で本文抽出 → Markdown 変換、失敗時は `BROWSER` binding の `quickAction('markdown')` (Browser Rendering) にフォールバック (`src/index.ts:133`)
-* **クエリ転送** — `as` / `browser` 以外の全クエリを `https://<host>/<path>?<forwarded>` に転送
+* **`as=md`** — `defuddle` (`defuddle/node`) で本文抽出 → Markdown 変換、失敗時は Browser Rendering の `quickAction('markdown')` にフォールバック
+* **クエリ転送** — `as` / `renderer` / `r` 以外の全クエリを `https://<host>/<path>?<forwarded>` に転送
 * **`https://` プレフィックス許容** — `/https://example.com/foo` や `/http://example.com/foo` も自動剥離
 * **オリジンエラー中継** — オリジンが 4xx/5xx ならステータスと body を CORS 付与でそのまま中継
 
@@ -59,7 +60,7 @@ https://fetch.nibo.sh
 
 | Method | Path | 説明 |
 |--------|------|------|
-| `GET` | `/` | `as` なしなら利用方法を返す `200 text/plain: "fetch-proxy: use /<host>/<path>?as=html\|meta\|md&browser=chromium\|kitesurf"`。それ以外は `400` |
+| `GET` | `/` | `as` なしなら利用方法を返す `200 text/plain: "fetch-proxy: use /<host>/<path>?as=html\|meta\|md&r=fetch,chromium,kitesurf"`。それ以外は `400` |
 | `GET` | `/{proxyPath}` | プロキシ本体。`proxyPath` は `example.com/foo` 形式（`https://` 付きも可）。`src/index.ts:192` で `pathname.slice(1)` を `hostAndPath` として処理 |
 | `HEAD` | `/{proxyPath}` | `GET` と同ルーティング（ヘッダのみ） |
 | `OPTIONS` | `/*` | CORS preflight → `204` + CORS ヘッダ |
@@ -73,8 +74,22 @@ https://fetch.nibo.sh
 | 名前 | 必須 | 型 | デフォルト | 説明 |
 |------|------|----|-----------|------|
 | `as` | no | `html \| meta \| md` | `html` | レスポンス形式。複数回指定すると `400 as parameter cannot be specified multiple times` |
-| `browser` | no | `chromium \| kitesurf` | `chromium` | Browser Rendering フォールバックで使うブラウザエンジン。`kitesurf` は REST API 経由のため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要（無い場合は chromium にフォールバック）。複数回指定すると `400 browser parameter cannot be specified multiple times`。転送先 URL には付与されない |
-| `*` (その他) | no | string | - | `as` / `browser` 以外は全て転送先 URL に付与。例: `/example.com/search?q=hello&as=md` → `https://example.com/search?q=hello` |
+| `renderer` / `r` | no | `fetch \| chromium \| kitesurf` の順序付きリスト | `fetch,chromium` | 取得経路を優先順に指定。先頭から順に試し、失敗したら次へフォールバックする。繰り返し指定 (`?r=kitesurf&r=chromium`)・カンマ区切り (`?r=kitesurf,chromium`)・両者の混在のいずれも可で、指定順がそのままチェーン順になる。`renderer` と `r` は同義（両方同時に指定すると 400）。転送先 URL には付与されない |
+| `*` (その他) | no | string | - | `as` / `renderer` / `r` 以外は全て転送先 URL に付与。例: `/example.com/search?q=hello&as=md` → `https://example.com/search?q=hello` |
+
+#### レンダラ
+
+各レンダラは URL から最終結果までを単独で完結させるパイプラインなので、どれをどの `as` と組み合わせても成立する。
+
+| renderer | `as=html` | `as=meta` | `as=md` |
+|---|---|---|---|
+| `fetch` | オリジン HTML をそのまま返す | `extractMeta()`（空なら defuddle の JSON-LD / schema.org 抽出） | defuddle で Markdown 変換 |
+| `chromium` | Browser Run `content` (`BROWSER` binding) | `content` → `extractMeta()` | Browser Run `markdown` |
+| `kitesurf` | Browser Run `content` (REST API) | `content` → `extractMeta()` | Browser Run `markdown` |
+
+* `kitesurf` は Browser Run REST API 経由でしか選べないため `CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が必要。未設定なら**失敗**として次のレンダラに進む（暗黙に chromium へ落ちることはない。従来の挙動が欲しい場合は `r=kitesurf,chromium` と明示する）
+* `fetch` がオリジンから 403 / 429 を受け取った場合はボット遮断とみなしてチェーンを継続する。それ以外の非 2xx（404 等）はオリジンの答えそのものなので、チェーンを打ち切ってステータスと body をそのまま中継する
+* チェーンに `fetch` が無い場合（例: `r=chromium`）、オリジンへの HTTP GET は一切行わない
 
 ### レスポンス
 
@@ -90,8 +105,23 @@ https://fetch.nibo.sh
 Access-Control-Allow-Origin: *
 Access-Control-Allow-Methods: GET, HEAD, OPTIONS
 Access-Control-Allow-Headers: *
+Access-Control-Expose-Headers: X-Renderer, X-Renderer-Chain
 Access-Control-Max-Age: 86400
 ```
+
+さらに、レンダラチェーンを通ったレスポンス（成功・失敗を問わず）には経路が付く:
+
+```
+X-Renderer: kitesurf
+X-Renderer-Chain: fetch=empty,kitesurf=ok
+```
+
+| ヘッダ | 説明 |
+|--------|------|
+| `X-Renderer` | 実際に結果を返したレンダラ。`as=meta` の YouTube oEmbed 経路は `oembed`。全レンダラが失敗した場合は付与されない |
+| `X-Renderer-Chain` | 試行したレンダラと結果を試行順にカンマ区切りで列挙。`ok` = 応答した / `empty` = 正常終了したが中身が空（`as=meta` でタイトルが取れないページ。チェーンは継続するが、最後まで何も見つからなければこの結果を返す） / `failed` = エラーまたは結果なし。指定されても到達しなかったレンダラは現れない |
+
+`X-Renderer*` は CORS セーフリスト外のヘッダなので、ブラウザの `fetch()` から読めるよう `Access-Control-Expose-Headers` で明示的に公開している。
 
 ### エラー
 
@@ -102,11 +132,15 @@ Access-Control-Max-Age: 86400
 | `400` | `invalid target URL` | URL パース失敗 |
 | `400` | `as parameter cannot be specified multiple times` | `as` 重複 (`getAll` >1) |
 | `400` | `invalid as value: foo. allowed: html, meta, md` | 不正な `as` |
-| `400` | `browser parameter cannot be specified multiple times` | `browser` 重複 (`getAll` >1) |
-| `400` | `invalid browser value: webkit. allowed: chromium, kitesurf` | 不正な `browser` |
+| `400` | `invalid renderer value: webkit. allowed: fetch, chromium, kitesurf` | 不正な `renderer` / `r` |
+| `400` | `duplicate renderer in r: chromium` | チェーン内で同じレンダラを重複指定 |
+| `400` | `empty renderer value in r` | 空要素（`?r=` / `?r=fetch,,chromium`） |
+| `400` | `specify either renderer or r, not both` | `renderer` と `r` を同時指定 |
+| `400` | `browser parameter has been removed. use r=chromium or r=kitesurf (repeatable or comma-separated)` | 廃止された `browser` |
 | `400` | `as=title has been removed. use as=meta and read ogTitle, falling back to title` | 廃止された `as=title` |
 | `502` | `failed to fetch target: ...` | `fetch(targetUrl)` 例外 |
-| `502` | `failed to convert to markdown: both defuddle and Browser Rendering failed` | `as=md` で両フォールバック失敗 |
+| `502` | `failed to convert to markdown: all renderers failed (fetch, chromium)` | `as=md` でチェーンの全レンダラが失敗 |
+| `502` | `all renderers failed (kitesurf)` | `as=html` でチェーンの全レンダラが失敗 |
 | `4xx/5xx` | オリジンの body をそのまま | オリジンが非 2xx（CORS 付与で中継） |
 | `405` | `method xxx not allowed` | `GET/HEAD/OPTIONS` 以外  |
 
@@ -144,14 +178,22 @@ curl https://fetch.nibo.sh/https://example.com/foo?as=meta
 curl -i -X OPTIONS https://fetch.nibo.sh/example.com/ -H "Origin: https://example.com"
 # => 204 + CORS headers
 
-# 9. Kitesurf (軽量 agent-first ブラウザ) でフォールバックをレンダリング
-curl "https://fetch.nibo.sh/medium.com/post?as=md&browser=kitesurf"
+# 9. Kitesurf を先に試し、ダメなら chromium にフォールバック
+curl "https://fetch.nibo.sh/medium.com/post?as=md&r=kitesurf,chromium"
 
-# 10. ブラウザ JS
-const md = await fetch("https://fetch.nibo.sh/example.com/blog?as=md").then(r => {
-  if (!r.ok) throw new Error(r.status);
-  return r.text();
-});
+# 10. オリジンを叩かず必ずブラウザでレンダリング（`fetch` を外す）
+curl -i "https://fetch.nibo.sh/example.com/spa?as=meta&r=kitesurf"
+
+# 11. どの経路で取れたかを確認
+curl -sI "https://fetch.nibo.sh/example.com/?as=meta" | grep -i x-renderer
+# => X-Renderer: fetch
+# => X-Renderer-Chain: fetch=ok
+
+# 12. ブラウザ JS
+const res = await fetch("https://fetch.nibo.sh/example.com/blog?as=md");
+if (!res.ok) throw new Error(res.status);
+console.log(res.headers.get("X-Renderer")); // 公開済みなのでクロスオリジンでも読める
+const md = await res.text();
 ```
 
 ## OpenAPI
@@ -220,16 +262,16 @@ const app = new Hono<{ Bindings: CloudflareBindings }>()
 }
 ```
 
-### シークレット (`browser=kitesurf` 用)
+### シークレット (`r=kitesurf` 用)
 
-`browser=kitesurf` は Browser Run REST API を直接呼ぶため、次の2つの binding が必要:
+`r=kitesurf` は Browser Run REST API を直接呼ぶため、次の2つの binding が必要:
 
 | 名前 | 種別 | 説明 |
 |------|------|------|
 | `CF_ACCOUNT_ID` | vars | Cloudflare アカウント ID |
 | `BROWSER_API_TOKEN` | secret (wrangler secret put) | `Browser Rendering - Edit` 権限を持つ API トークン |
 
-未設定でも chromium 経路は通常どおり動作し、`kitesurf` 指定時は警告ログとともに chromium binding へフォールバックする。
+未設定でも `fetch` / `chromium` 経路は通常どおり動作する。`kitesurf` は認証情報が無いと**失敗**扱いになり、チェーンの次のレンダラに進む（暗黙に chromium へ落ちることはない）。単独で `r=kitesurf` を指定していれば 502 になる。
 
 ```sh
 wrangler secret put BROWSER_API_TOKEN
@@ -253,12 +295,16 @@ wrangler secret put BROWSER_API_TOKEN
 
 * **Polyfill:** `workerd` では `document`/`DOMParser` が無いため、`linkedom` の `parseHTML` でグローバルを polyfill してから `defuddle/node` を動的 import (`src/index.ts:6`, `src/index.ts:77`)
 * **meta 抽出:** `extractMeta()` が `<title>` と各 OGP を一括抽出。各キーは `meta[property=...]` → `meta[name=...]` → エスケープ付き `property` の順で探索し、HTML パース失敗時は regex フォールバック
-* **SPA フォールバック:** オリジン HTML はレンダリング前の状態なので、CSR の SPA（例: `z.ai/blog/*`）は `<div id="root"></div>` だけを返しタイトルが取れない。`needsRendering()`（`og:title` も `<title>` も空）が真なら `browserMeta()` が `quickAction('content')` でレンダリング後の HTML を取得し、同じ `extractMeta()` を適用する。`<title>` 要素が無いまま `document.title` だけ設定する SPA のために、Browser Rendering の `meta.title` も併用。取得済みの値は `mergeMeta()` でオリジン HTML 側を優先し、空欄のみ埋める
+* **SPA フォールバック:** オリジン HTML はレンダリング前の状態なので、CSR の SPA（例: `z.ai/blog/*`）は `<div id="root"></div>` だけを返しタイトルが取れない。`needsRendering()`（`og:title` も `<title>` も空）が真なら、まず `defuddleMeta()` が JSON-LD / schema.org を読み（ブラウザ不要で安い）、それでも空ならチェーンの次のレンダラで `browserMeta()` が `quickAction('content')` からレンダリング後の HTML を取得し、同じ `extractMeta()` を適用する。`<title>` 要素が無いまま `document.title` だけ設定する SPA のために、Browser Rendering の `meta.title` も併用。取得済みの値は `mergeMeta()` でオリジン HTML 側を優先し、空欄のみ埋める
 * **SPA フォールバックのコスト:** ヘッド情報しか要らないため `waitUntil: 'load'` + 画像/メディア/フォント/CSS を `rejectResourceTypes` でブロックして待ち時間を削減。それでもコールドで数秒かかるので `cacheTTL: 600` を指定し、リトライを安く済ませる。`og:title` か `<title>` がある通常のページではブラウザを一切起動しない
 * **YouTube (oEmbed):** YouTube は Worker（データセンター IP）からの watch ページ取得に reCAPTCHA 画面 (429) か「YouTube」とだけ書かれた JS シェルを返すため、オリジン HTML からも Browser Rendering からも動画タイトルが取れない。`as=meta` では origin fetch の前に `youtubeWatchUrl()` が動画 URL を `https://www.youtube.com/watch?v=<id>` に正規化し（`youtu.be` / `shorts` / `live` / `embed` / `/v/` / `m.` / `music.` / `?si=` 除去に対応）、キー不要の `https://www.youtube.com/oembed` から取得する (`src/youtube.ts`)。オリジンの 429 はこの分岐より手前で中継されてしまうので、順序が重要。非公開・削除済み動画やチャンネル/プレイリスト URL では従来どおりオリジン HTML にフォールバックする
 * **md 変換:** `Defuddle(document, url, {markdown:true})` の `wordCount <10 && md.length <50` または `md.length <20` は失敗扱い → Browser Rendering へ (`src/index.ts:113`, `src/index.ts:315`)
 * **Browser Rendering:** `env.BROWSER.quickAction('markdown', {url, gotoOptions:{waitUntil:'networkidle0'}})` (`src/index.ts:136`)、JSON `{success, result}` をパース
-* **Kitesurf (`browser=kitesurf`):** Workers binding の `quickAction()` はブラウザエンジンを選択できない（未対応キーは `400 Unrecognized key` で拒否される）ため、`CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が設定されている場合のみ Browser Run REST API (`POST /client/v4/accounts/<id>/browser-rendering/{content|markdown}?browser=kitesurf`) を直接呼ぶ (`restQuickAction()`)。REST 未設定・失敗時は警告ログとともに chromium binding へフォールバックし、`kitesurf` 指定がプロキシを停止させない。Kitesurf は Chromium 比 CPU/メモリ 3〜7× 削減の代わりに壁時間 1.7〜1.8×、ピクセル完全な描画や動画/WebGL は非対応 ([ドキュメント](https://developers.cloudflare.com/browser-run/kitesurf/))
+* **Kitesurf (`r=kitesurf`):** Workers binding の `quickAction()` はブラウザエンジンを選択できない（未対応キーは `400 Unrecognized key` で拒否される）ため、`CF_ACCOUNT_ID` + `BROWSER_API_TOKEN` が設定されている場合のみ Browser Run REST API (`POST /client/v4/accounts/<id>/browser-rendering/{content|markdown}?browser=kitesurf`) を直接呼ぶ (`restQuickAction()`)。Kitesurf は Chromium 比 CPU/メモリ 3〜7× 削減の代わりに壁時間 1.7〜1.8×、ピクセル完全な描画や動画/WebGL は非対応 ([ドキュメント](https://developers.cloudflare.com/browser-run/kitesurf/))
+* **レンダラチェーン:** `parseChain()` が `renderer` / `r` を読み、`fetch` / `chromium` / `kitesurf` の順序付きリストに展開する。順序は `new URL(c.req.url).searchParams.getAll()` で取得しており、WHATWG URL 仕様が `getAll()` にクエリ文字列の出現順を保証しているため、フレームワーク側の実装に依存しない。ハンドラはこのリストを先頭から順に試し、最初に応答したレンダラの結果を返す
+* **暗黙フォールバックの廃止:** 旧 `browser=kitesurf` は REST 未設定・失敗時に `quickActionResult()` の中で黙って chromium binding に落ちていた。チェーンが明示的になった今、隠れたフォールバックは `X-Renderer` を嘘にするため削除した。`quickActionResult()` は kitesurf → REST のみ / chromium → binding のみで、失敗したら `null` を返して判断を呼び出し側のチェーンに委ねる
+* **オリジン取得のメモ化:** `fetch` レンダラが名指しされたときだけオリジンに HTTP GET し、結果は `originState` に保持する。チェーンが尽きたあとに 403/429 の body を中継するのに再利用するため、リクエストあたり必ず 1 回に収まる
+* **`withDomGlobals()`:** `defuddle/node` と turndown は引数ではなくグローバルの `document` / `window` を直接見るため、linkedom の DOM を一時的にグローバルへ差し込み、`finally` で必ず元に戻す。`tryDefuddle()`（Markdown）と `defuddleMeta()`（メタ情報）が共有する
 
 ## ライセンス
 
