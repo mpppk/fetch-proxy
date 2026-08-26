@@ -306,14 +306,23 @@ const BROWSER_META_CACHE_TTL_SECONDS = 600;
  *   chromium — Browser Run's full engine, through the BROWSER binding
  *   kitesurf — Browser Run's lightweight agent-first engine, through the REST API
  */
-type Renderer = "fetch" | "chromium" | "kitesurf";
+type Renderer = "fetch" | "kitesurf" | "chromium";
 type BrowserEngine = Exclude<Renderer, "fetch">;
 
-const RENDERERS = ["fetch", "chromium", "kitesurf"] as const;
+const RENDERERS = ["fetch", "kitesurf", "chromium"] as const;
 
-// Reproduces the behaviour the proxy had before the chain existed, for every
-// `as`: ask the origin, and only reach for a browser when that cannot answer.
-const DEFAULT_CHAIN: Renderer[] = ["fetch", "chromium"];
+/**
+ * `auto` is not a renderer but a name for the recommended chain: ask the
+ * origin, then escalate through the browsers cheapest-first. kitesurf costs
+ * 3-7x less CPU and memory than chromium at roughly 1.7x the wall time, so it
+ * is worth a turn before chromium is paid for. It is what an unspecified
+ * `renderer` means, so `?r=auto` and omitting the parameter are the same
+ * request.
+ */
+const AUTO_CHAIN: Renderer[] = ["fetch", "kitesurf", "chromium"];
+
+// Everything `renderer` / `r` accepts, in the order `auto` would run them.
+const RENDERER_VALUES = ["auto", ...RENDERERS] as const;
 
 /**
  * How one renderer's attempt ended.
@@ -384,18 +393,38 @@ function parseChain(params: URLSearchParams): ChainParse {
     return { ok: false, message: "specify either renderer or r, not both" };
   }
   const raw = long.length > 0 ? long : short;
-  if (raw.length === 0) return { ok: true, chain: [...DEFAULT_CHAIN] };
+  // Naming no renderer means auto, so the two spellings stay interchangeable.
+  if (raw.length === 0) return { ok: true, chain: [...AUTO_CHAIN] };
 
-  const chain: Renderer[] = [];
+  const names: string[] = [];
   for (const value of raw.flatMap((entry) => entry.split(","))) {
     const name = value.trim();
     if (!name) return { ok: false, message: "empty renderer value in r" };
-    if (!(RENDERERS as readonly string[]).includes(name)) {
+    if (!(RENDERER_VALUES as readonly string[]).includes(name)) {
       return {
         ok: false,
-        message: `invalid renderer value: ${name}. allowed: ${RENDERERS.join(", ")}`,
+        message: `invalid renderer value: ${name}. allowed: ${RENDERER_VALUES.join(", ")}`,
       };
     }
+    names.push(name);
+  }
+
+  // auto is a whole chain rather than a link in one: it already ends at
+  // chromium, so anything written after it is unreachable, and anything before
+  // it collides with the renderers it expands to. Say that plainly instead of
+  // reporting the collision as a duplicate.
+  if (names.includes("auto")) {
+    if (names.length > 1) {
+      return {
+        ok: false,
+        message: "renderer auto cannot be combined with other renderers",
+      };
+    }
+    return { ok: true, chain: [...AUTO_CHAIN] };
+  }
+
+  const chain: Renderer[] = [];
+  for (const name of names) {
     if (chain.includes(name as Renderer)) {
       return { ok: false, message: `duplicate renderer in r: ${name}` };
     }
@@ -652,7 +681,7 @@ app.get("/", (c) => {
     url.searchParams.toString() === ""
   ) {
     return c.text(
-      "fetch-proxy: use /<host>/<path>?as=html|meta|md&r=fetch,chromium,kitesurf",
+      "fetch-proxy: use /<host>/<path>?as=html|meta|md&r=auto|fetch|kitesurf|chromium",
       200,
       withCors({ "Content-Type": "text/plain; charset=utf-8" }),
     );

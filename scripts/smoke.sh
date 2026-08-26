@@ -111,6 +111,7 @@ check_body GET "/example.com/?as=invalid" 400 "invalid as value"
 check_body GET "/example.com/?as=html&r=webkit" 400 "invalid renderer value"
 check_body GET "/example.com/?as=html&r=chromium&r=chromium" 400 "duplicate renderer in r"
 check_body GET "/example.com/?as=html&renderer=fetch&r=chromium" 400 "specify either renderer or r"
+check_body GET "/example.com/?as=html&r=auto,chromium" 400 "renderer auto cannot be combined"
 
 # --- browser parameter removed ---
 check_body GET "/example.com/?as=html&browser=kitesurf" 400 "browser parameter has been removed"
@@ -155,6 +156,8 @@ check_header GET "/example.com/?as=md" 200 "Access-Control-Allow-Origin" "*"
 check_header GET "/example.com/?as=meta" 200 "X-Renderer" "fetch"
 check_header GET "/example.com/?as=meta" 200 "X-Renderer-Chain" "fetch=ok"
 check_header GET "/example.com/?as=html" 200 "Access-Control-Expose-Headers" "X-Renderer"
+# r=auto is what an absent renderer already means, so both answer from fetch.
+check_header GET "/example.com/?as=meta&r=auto" 200 "X-Renderer-Chain" "fetch=ok"
 
 # --- Query forwarding ---
 check_body GET "/example.com/?as=meta" 200 "Example Domain"

@@ -284,7 +284,7 @@ describe("fetch-proxy", () => {
     const res = await app.request("/example.com/?as=html&r=webkit");
     expect(res.status).toBe(400);
     expect(await res.text()).toContain(
-      "invalid renderer value: webkit. allowed: fetch, chromium, kitesurf",
+      "invalid renderer value: webkit. allowed: auto, fetch, kitesurf, chromium",
     );
   });
 
@@ -618,7 +618,7 @@ describe("fetch-proxy", () => {
     expect(res.status).toBe(403);
     expect(await res.text()).toBe("blocked");
     expect(res.headers.get("X-Renderer-Chain")).toBe(
-      "fetch=failed,chromium=failed",
+      "fetch=failed,kitesurf=failed,chromium=failed",
     );
     vi.unstubAllGlobals();
   });
@@ -674,10 +674,10 @@ describe("fetch-proxy", () => {
       finalUrl: "https://example.com/app",
     });
     // fetch produced a well-formed but empty answer, which is what gets served
-    // once chromium (no binding in tests) fails outright.
+    // once both browsers (no credentials, no binding in tests) fail outright.
     expect(res.headers.get("X-Renderer")).toBe("fetch");
     expect(res.headers.get("X-Renderer-Chain")).toBe(
-      "fetch=empty,chromium=failed",
+      "fetch=empty,kitesurf=failed,chromium=failed",
     );
     vi.unstubAllGlobals();
   });
@@ -693,11 +693,111 @@ describe("fetch-proxy", () => {
     const res = await app.request("/example.com/empty?as=md");
     expect(res.status).toBe(502);
     expect(await res.text()).toContain(
-      "failed to convert to markdown: all renderers failed (fetch, chromium)",
+      "failed to convert to markdown: all renderers failed (fetch, kitesurf, chromium)",
     );
     expect(res.headers.get("X-Renderer-Chain")).toBe(
-      "fetch=failed,chromium=failed",
+      "fetch=failed,kitesurf=failed,chromium=failed",
     );
+    vi.unstubAllGlobals();
+  });
+
+  // --- auto ---
+
+  it("r=auto and an absent renderer describe the same chain", async () => {
+    const shell = `<!DOCTYPE html><html><head></head><body><div id="root"></div></body></html>`;
+    for (const query of [
+      "as=meta",
+      "as=meta&r=auto",
+      "as=meta&renderer=auto",
+    ]) {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(shell, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const res = await app.request(`/example.com/app?${query}`);
+      expect(res.status).toBe(200);
+      // fetch, then the cheap browser, then the expensive one.
+      expect(res.headers.get("X-Renderer-Chain")).toBe(
+        "fetch=empty,kitesurf=failed,chromium=failed",
+      );
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("auto puts kitesurf ahead of chromium", async () => {
+    const shell = `<!DOCTYPE html><html><head></head><body><div id="root"></div></body></html>`;
+    const fetchMock = vi.fn().mockImplementation((input: unknown) => {
+      if (String(input).includes("api.cloudflare.com")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              success: true,
+              result: "<html><head><title>Rendered</title></head></html>",
+              meta: { status: 200, title: "Rendered" },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(shell, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const env = { CF_ACCOUNT_ID: "acct123", BROWSER_API_TOKEN: "tok123" };
+    const res = await app.request(
+      "/example.com/app?as=meta&r=auto",
+      undefined,
+      env,
+    );
+    expect(res.status).toBe(200);
+    // kitesurf answers, so chromium is never reached and never billed.
+    expect(res.headers.get("X-Renderer")).toBe("kitesurf");
+    expect(res.headers.get("X-Renderer-Chain")).toBe("fetch=empty,kitesurf=ok");
+    const restUrl = new URL(
+      String(
+        fetchMock.mock.calls.find(([input]) =>
+          String(input).includes("api.cloudflare.com"),
+        )?.[0],
+      ),
+    );
+    expect(restUrl.searchParams.get("browser")).toBe("kitesurf");
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects auto combined with another renderer", async () => {
+    for (const query of [
+      "r=auto,chromium",
+      "r=kitesurf&r=auto",
+      "r=auto,auto",
+    ]) {
+      const res = await app.request(`/example.com/?as=html&${query}`);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain(
+        "renderer auto cannot be combined with other renderers",
+      );
+    }
+  });
+
+  it("still allows an explicit chain that skips kitesurf", async () => {
+    const html = "<html><head><title>Origin</title></head><body></body></html>";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(html, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await app.request("/example.com/?as=html&r=fetch,chromium");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Renderer-Chain")).toBe("fetch=ok");
     vi.unstubAllGlobals();
   });
 });
