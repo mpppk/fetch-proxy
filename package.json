@@ -2,7 +2,7 @@
   "name": "fetch-proxy",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
